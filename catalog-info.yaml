@@ -2,11 +2,13 @@ apiVersion: backstage.io/v1alpha1
 kind: Component
 metadata:
   name: blitzy-slack
-  description: "Slack integration sandbox — exploring AI-assisted communication platform development"
+  description: Slack integration sandbox — exploring AI-assisted communication platform
+    development
   tags:
-    - typescript
-    - web-app
-    - new-feature
+  - new-feature
+  - proof-of-concept
+  - typescript
+  - web-app
   labels:
     blitzy.com/language: typescript
   annotations:
@@ -14,11 +16,11 @@ metadata:
     github.com/project-slug: Blitzy-Sandbox/blitzy-slack
     backstage.io/source-location: url:https://github.com/Blitzy-Sandbox/blitzy-slack/tree/main/
   links:
-    - url: https://github.com/Blitzy-Sandbox/blitzy-slack
-      title: GitHub Repository
-    - url: https://github.com/Blitzy-Sandbox/blitzy-slack/tree/main/blitzy/documentation
-      title: Blitzy Documentation
-      icon: docs
+  - url: https://github.com/Blitzy-Sandbox/blitzy-slack
+    title: GitHub Repository
+  - url: https://github.com/Blitzy-Sandbox/blitzy-slack/tree/main/blitzy/documentation
+    title: Blitzy Documentation
+    icon: docs
 spec:
   type: service
   lifecycle: experimental
