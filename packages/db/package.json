@@ -2,27 +2,45 @@
   "name": "@app/db",
   "version": "0.1.0",
   "private": true,
+  "description": "Prisma 6 schema, migrations, and singleton Prisma Client wrapper for the Blitzy Slack PoC.",
+  "license": "UNLICENSED",
   "type": "module",
   "main": "./src/index.ts",
   "types": "./src/index.ts",
   "exports": {
-    ".": "./src/index.ts"
+    ".": "./src/index.ts",
+    "./client": "./src/client.ts",
+    "./package.json": "./package.json"
   },
+  "files": [
+    "dist",
+    "src",
+    "prisma/schema.prisma",
+    "prisma/migrations",
+    "prisma/seed.ts",
+    "README.md"
+  ],
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
+    "clean": "rm -rf dist",
     "generate": "prisma generate",
     "migrate": "prisma migrate deploy",
     "migrate:dev": "prisma migrate dev",
-    "studio": "prisma studio"
+    "migrate:reset": "prisma migrate reset --force",
+    "studio": "prisma studio",
+    "seed": "tsx ../../scripts/seed-via-api.ts"
+  },
+  "prisma": {
+    "schema": "prisma/schema.prisma",
+    "seed": "tsx prisma/seed.ts"
   },
   "dependencies": {
     "@app/shared": "workspace:*",
     "@prisma/client": "^6.0.0"
   },
   "devDependencies": {
-    "@types/node": "^22.0.0",
     "prisma": "^6.0.0",
-    "typescript": "^5.7.0"
+    "tsx": "^4.0.0"
   }
 }
