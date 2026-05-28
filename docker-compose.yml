@@ -1,8 +1,24 @@
-# Local infrastructure for blitzy-slack proof-of-concept.
-# Brought up by `make local` / `make up`. Provides PostgreSQL 16 and Redis 7
-# with persistent named volumes and healthchecks so `docker compose up --wait`
-# blocks until both services are ready.
+# Local infrastructure for the blitzy-slack proof-of-concept.
+#
+# Brought up by `make up` / `make local`, which run `docker compose up -d --wait`
+# and block until both services report healthy. The API and web packages run on
+# the HOST (not in this file) so that hot-reload stays fast; only the stateful
+# backing services live in Docker here.
+#
+# Modern Docker Compose v2 — no top-level `version:` field (it is obsolete and
+# triggers a warning). The defaults below intentionally match the values shipped
+# in `.env.example` (slack / slack / slack_dev) so the stack works out of the box;
+# every value can be overridden via a root `.env` (the Makefile loads and exports
+# it). Credentials here are LOCAL-DEVELOPMENT ONLY and are not real secrets.
+#
+# Rationale for these choices (alpine images, C collation, AOF persistence,
+# host-run app, etc.) is recorded in /docs/decision-log.md — the single source
+# of truth for "why" decisions.
+
 services:
+  # PostgreSQL 16 — primary relational store. Full-text search uses a tsvector
+  # column over Message.content, so the database is initialised as UTF-8 with a
+  # deterministic C collation for stable, byte-level ordering across hosts.
   postgres:
     image: postgres:16-alpine
     container_name: blitzy-slack-postgres
@@ -11,6 +27,8 @@ services:
       POSTGRES_USER: ${POSTGRES_USER:-slack}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-slack}
       POSTGRES_DB: ${POSTGRES_DB:-slack_dev}
+      # Applied only on first initialisation of an empty data volume.
+      POSTGRES_INITDB_ARGS: '--encoding=UTF-8 --lc-collate=C --lc-ctype=C'
     ports:
       - '${POSTGRES_PORT:-5432}:5432'
     volumes:
@@ -22,6 +40,8 @@ services:
       retries: 10
       start_period: 10s
 
+  # Redis 7 — Socket.io pub/sub adapter (Rule 2) and presence TTL cache.
+  # AOF persistence keeps presence keys and adapter state across restarts.
   redis:
     image: redis:7-alpine
     container_name: blitzy-slack-redis
@@ -38,8 +58,13 @@ services:
       retries: 10
       start_period: 5s
 
+# Named volumes give the data stable, predictable names independent of the
+# Compose project directory, and survive `make down` / `make clean` (which do
+# not pass `-v`). Remove them explicitly with `docker compose down -v`.
 volumes:
   postgres_data:
     name: blitzy-slack-postgres-data
+    driver: local
   redis_data:
     name: blitzy-slack-redis-data
+    driver: local
