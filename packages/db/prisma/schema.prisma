@@ -1,0 +1,16 @@
+// Prisma schema (SETUP STUB).
+// Datasource + generator only. The full data model (User, Channel,
+// ChannelMember, DirectMessage, DMParticipant, Message, MessageReaction, File)
+// and the tsvector full-text-search migration are authored by downstream
+// code-generation agents per AAP section 0.4.4. This stub is intentionally
+// model-free so `prisma validate` / `prisma generate` succeed against a clean
+// install and confirm toolchain compatibility.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}

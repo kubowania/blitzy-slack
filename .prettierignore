@@ -1,0 +1,13 @@
+node_modules
+dist
+build
+coverage
+playwright-report
+test-results
+pnpm-lock.yaml
+packages/*/src/components/ui
+screenshots
+
+# Pre-existing platform/docs files maintained outside the app's prettier config
+catalog-info.yaml
+mkdocs.yml

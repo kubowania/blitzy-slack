@@ -1,0 +1,45 @@
+# Local infrastructure for blitzy-slack proof-of-concept.
+# Brought up by `make local` / `make up`. Provides PostgreSQL 16 and Redis 7
+# with persistent named volumes and healthchecks so `docker compose up --wait`
+# blocks until both services are ready.
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: blitzy-slack-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-slack}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-slack}
+      POSTGRES_DB: ${POSTGRES_DB:-slack_dev}
+    ports:
+      - '${POSTGRES_PORT:-5432}:5432'
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U ${POSTGRES_USER:-slack} -d ${POSTGRES_DB:-slack_dev}']
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+
+  redis:
+    image: redis:7-alpine
+    container_name: blitzy-slack-redis
+    restart: unless-stopped
+    command: ['redis-server', '--appendonly', 'yes']
+    ports:
+      - '${REDIS_PORT:-6379}:6379'
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 5s
+
+volumes:
+  postgres_data:
+    name: blitzy-slack-postgres-data
+  redis_data:
+    name: blitzy-slack-redis-data

@@ -1,0 +1,37 @@
+# Dependencies
+node_modules/
+.pnpm-store/
+
+# Build output
+dist/
+build/
+*.tsbuildinfo
+
+# Prisma generated client
+packages/db/src/generated/
+.prisma/
+
+# Test / coverage artifacts
+coverage/
+playwright-report/
+test-results/
+blitzy_adhoc_test_*
+
+# Local env files (templates .env.example ARE committed)
+.env
+.env.local
+.env.*.local
+
+# Uploaded files (FILE_UPLOAD_PATH default)
+uploads/
+
+# Logs
+*.log
+npm-debug.log*
+pnpm-debug.log*
+
+# Editor / OS
+.DS_Store
+.idea/
+.vscode/
+*.swp
