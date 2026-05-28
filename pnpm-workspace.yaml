@@ -1,2 +1,17 @@
+# pnpm workspace declaration. See https://pnpm.io/pnpm-workspace_yaml
+# Rationale for these choices is recorded in /docs/decision-log.md (Explainability rule).
+
 packages:
-  - 'packages/*'
+  - 'packages/db'
+  - 'packages/shared'
+  - 'packages/api'
+  - 'packages/web'
+
+# Dependencies permitted to run install/build scripts. pnpm 10+ gates build
+# scripts behind this allow-list; pnpm 9 accepts it without warnings.
+onlyBuiltDependencies:
+  - '@prisma/client'
+  - 'prisma'
+  - 'bcrypt'
+  - 'esbuild'
+  - '@playwright/test'
