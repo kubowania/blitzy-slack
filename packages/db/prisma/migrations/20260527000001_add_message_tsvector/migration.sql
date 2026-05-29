@@ -3,8 +3,8 @@
 -- without recomputing tsvector on every read.
 
 ALTER TABLE "Message"
-  ADD COLUMN "contentSearch" tsvector
+  ADD COLUMN "contentTsv" tsvector
   GENERATED ALWAYS AS (to_tsvector('english', "content")) STORED;
 
 -- GIN index supports tsquery '@@' operator efficiently.
-CREATE INDEX "Message_contentSearch_idx" ON "Message" USING GIN ("contentSearch");
+CREATE INDEX "Message_contentTsv_idx" ON "Message" USING GIN ("contentTsv");

@@ -2,10 +2,7 @@
 # Rationale for these choices is recorded in /docs/decision-log.md (Explainability rule).
 
 packages:
-  - 'packages/db'
-  - 'packages/shared'
-  - 'packages/api'
-  - 'packages/web'
+  - 'packages/*'
 
 # Dependencies permitted to run install/build scripts. pnpm 10+ gates build
 # scripts behind this allow-list; pnpm 9 accepts it without warnings.

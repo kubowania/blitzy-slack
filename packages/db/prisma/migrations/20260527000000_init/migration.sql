@@ -3,7 +3,7 @@ CREATE TABLE "User" (
     "id" TEXT NOT NULL,
     "email" TEXT NOT NULL,
     "passwordHash" TEXT NOT NULL,
-    "displayName" TEXT NOT NULL,
+    "displayName" VARCHAR(80) NOT NULL,
     "avatarUrl" TEXT,
     "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "updatedAt" TIMESTAMP(3) NOT NULL,
@@ -14,8 +14,8 @@ CREATE TABLE "User" (
 -- CreateTable
 CREATE TABLE "Channel" (
     "id" TEXT NOT NULL,
-    "name" TEXT NOT NULL,
-    "description" TEXT,
+    "name" VARCHAR(80) NOT NULL,
+    "description" VARCHAR(250),
     "isPrivate" BOOLEAN NOT NULL DEFAULT false,
     "createdById" TEXT NOT NULL,
     "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -37,6 +37,8 @@ CREATE TABLE "ChannelMember" (
 -- CreateTable
 CREATE TABLE "DirectMessage" (
     "id" TEXT NOT NULL,
+    "participantOneId" TEXT NOT NULL,
+    "participantTwoId" TEXT NOT NULL,
     "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
     CONSTRAINT "DirectMessage_pkey" PRIMARY KEY ("id")
@@ -53,7 +55,7 @@ CREATE TABLE "DMParticipant" (
 -- CreateTable
 CREATE TABLE "Message" (
     "id" TEXT NOT NULL,
-    "content" TEXT NOT NULL,
+    "content" VARCHAR(4000) NOT NULL,
     "authorId" TEXT NOT NULL,
     "channelId" TEXT,
     "dmId" TEXT,
@@ -70,7 +72,7 @@ CREATE TABLE "MessageReaction" (
     "id" TEXT NOT NULL,
     "messageId" TEXT NOT NULL,
     "userId" TEXT NOT NULL,
-    "emoji" TEXT NOT NULL,
+    "emoji" VARCHAR(64) NOT NULL,
     "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
     CONSTRAINT "MessageReaction_pkey" PRIMARY KEY ("id")
@@ -79,11 +81,11 @@ CREATE TABLE "MessageReaction" (
 -- CreateTable
 CREATE TABLE "File" (
     "id" TEXT NOT NULL,
-    "originalName" TEXT NOT NULL,
-    "storedName" TEXT NOT NULL,
-    "mimeType" TEXT NOT NULL,
+    "originalName" VARCHAR(255) NOT NULL,
+    "storedName" VARCHAR(255) NOT NULL,
+    "mimeType" VARCHAR(255) NOT NULL,
     "sizeBytes" INTEGER NOT NULL,
-    "uploadedById" TEXT NOT NULL,
+    "uploadedById" TEXT,
     "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
     CONSTRAINT "File_pkey" PRIMARY KEY ("id")
@@ -114,16 +116,25 @@ CREATE INDEX "ChannelMember_userId_idx" ON "ChannelMember"("userId");
 CREATE UNIQUE INDEX "ChannelMember_channelId_userId_key" ON "ChannelMember"("channelId", "userId");
 
 -- CreateIndex
+CREATE INDEX "DirectMessage_participantOneId_idx" ON "DirectMessage"("participantOneId");
+
+-- CreateIndex
+CREATE INDEX "DirectMessage_participantTwoId_idx" ON "DirectMessage"("participantTwoId");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "DirectMessage_participantOneId_participantTwoId_key" ON "DirectMessage"("participantOneId", "participantTwoId");
+
+-- CreateIndex
 CREATE INDEX "DMParticipant_userId_idx" ON "DMParticipant"("userId");
 
 -- CreateIndex
 CREATE UNIQUE INDEX "Message_fileId_key" ON "Message"("fileId");
 
 -- CreateIndex
-CREATE INDEX "Message_channelId_createdAt_idx" ON "Message"("channelId", "createdAt");
+CREATE INDEX "Message_channelId_createdAt_idx" ON "Message"("channelId", "createdAt" DESC, "id" DESC);
 
 -- CreateIndex
-CREATE INDEX "Message_dmId_createdAt_idx" ON "Message"("dmId", "createdAt");
+CREATE INDEX "Message_dmId_createdAt_idx" ON "Message"("dmId", "createdAt" DESC, "id" DESC);
 
 -- CreateIndex
 CREATE INDEX "Message_parentId_idx" ON "Message"("parentId");
@@ -132,7 +143,7 @@ CREATE INDEX "Message_parentId_idx" ON "Message"("parentId");
 CREATE INDEX "Message_authorId_idx" ON "Message"("authorId");
 
 -- CreateIndex
-CREATE INDEX "Message_createdAt_idx" ON "Message"("createdAt");
+CREATE INDEX "Message_createdAt_idx" ON "Message"("createdAt" DESC, "id" DESC);
 
 -- CreateIndex
 CREATE INDEX "MessageReaction_messageId_idx" ON "MessageReaction"("messageId");
@@ -162,6 +173,12 @@ ALTER TABLE "ChannelMember" ADD CONSTRAINT "ChannelMember_channelId_fkey" FOREIG
 ALTER TABLE "ChannelMember" ADD CONSTRAINT "ChannelMember_userId_fkey" FOREIGN KEY ("userId") REFERENCES "User"("id") ON DELETE CASCADE ON UPDATE CASCADE;
 
 -- AddForeignKey
+ALTER TABLE "DirectMessage" ADD CONSTRAINT "DirectMessage_participantOneId_fkey" FOREIGN KEY ("participantOneId") REFERENCES "User"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "DirectMessage" ADD CONSTRAINT "DirectMessage_participantTwoId_fkey" FOREIGN KEY ("participantTwoId") REFERENCES "User"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
 ALTER TABLE "DMParticipant" ADD CONSTRAINT "DMParticipant_dmId_fkey" FOREIGN KEY ("dmId") REFERENCES "DirectMessage"("id") ON DELETE CASCADE ON UPDATE CASCADE;
 
 -- AddForeignKey
@@ -189,4 +206,4 @@ ALTER TABLE "MessageReaction" ADD CONSTRAINT "MessageReaction_messageId_fkey" FO
 ALTER TABLE "MessageReaction" ADD CONSTRAINT "MessageReaction_userId_fkey" FOREIGN KEY ("userId") REFERENCES "User"("id") ON DELETE CASCADE ON UPDATE CASCADE;
 
 -- AddForeignKey
-ALTER TABLE "File" ADD CONSTRAINT "File_uploadedById_fkey" FOREIGN KEY ("uploadedById") REFERENCES "User"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+ALTER TABLE "File" ADD CONSTRAINT "File_uploadedById_fkey" FOREIGN KEY ("uploadedById") REFERENCES "User"("id") ON DELETE SET NULL ON UPDATE CASCADE;

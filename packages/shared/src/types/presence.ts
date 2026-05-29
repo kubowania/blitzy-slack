@@ -17,10 +17,8 @@
  */
 
 /**
- * User presence state.
- *
- * Declared as a string-literal type alias union (NOT a TypeScript `enum`)
- * to avoid runtime emit under `isolatedModules: true` per AAP Rule 3.
+ * User presence state. See the file header for the heartbeat thresholds that
+ * map a last-seen timestamp to each value.
  */
 export type PresenceState = 'online' | 'away' | 'offline';
 

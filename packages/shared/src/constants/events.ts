@@ -16,8 +16,8 @@
  * other room participants. The constant is declared ONCE and used in both
  * directions to keep the single source of truth.
  *
- * Per the Explainability rule (AAP §0.8.3), rationale for individual naming
- * choices (e.g., SOCKET_ERROR rename) is recorded in /docs/decision-log.md.
+ * Per the Explainability rule (AAP §0.8.3), rationale for naming and design
+ * choices is recorded in /docs/decision-log.md, not in these comments.
  */
 
 // ===========================================================================
@@ -71,13 +71,10 @@ export const REACTION_REMOVED = 'reaction:removed' as const;
 export const PRESENCE_UPDATE = 'presence:update' as const;
 
 /**
- * Server emits a generic error payload to the originating socket.
- *
- * The CONSTANT name is SOCKET_ERROR (not ERROR) to avoid clashing with the
- * global `Error` class; the STRING VALUE is `'error'` to match Socket.io's
- * conventional reserved error channel.
+ * Server emits a generic error payload to the originating socket. The wire
+ * value `'error'` is Socket.io's reserved error channel.
  */
-export const SOCKET_ERROR = 'error' as const;
+export const ERROR = 'error' as const;
 
 // ===========================================================================
 // Bundle object — convenience grouping for consumers who prefer
@@ -108,7 +105,7 @@ export const SOCKET_EVENTS = {
   TYPING_STOP,
   PRESENCE_HEARTBEAT,
   PRESENCE_UPDATE,
-  SOCKET_ERROR,
+  ERROR,
 } as const;
 
 /**
