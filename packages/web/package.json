@@ -2,13 +2,20 @@
   "name": "@app/web",
   "version": "0.1.0",
   "private": true,
+  "description": "Blitzy Slack web client (React 19 + Vite 6 + shadcn/ui + Tailwind v4)",
+  "license": "UNLICENSED",
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "vite build",
-    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "build": "tsc -p tsconfig.json --noEmit && vite build",
     "preview": "vite preview",
-    "test:e2e": "playwright test"
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "lint": "eslint . --max-warnings 0",
+    "clean": "rm -rf dist node_modules/.vite"
+  },
+  "engines": {
+    "node": ">=22.12.0",
+    "pnpm": ">=9.0.0"
   },
   "dependencies": {
     "@app/shared": "workspace:*",
@@ -48,7 +55,6 @@
     "@types/react-dom": "^19.0.0",
     "@vitejs/plugin-react": "^4.3.0",
     "tailwindcss": "^4.0.0",
-    "typescript": "^5.7.0",
     "vite": "^6.0.0"
   }
 }
