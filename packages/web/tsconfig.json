@@ -13,13 +13,6 @@
       "@/*": ["./src/*"]
     }
   },
-  "include": [
-    "src/**/*.ts",
-    "src/**/*.tsx",
-    "test/**/*.ts",
-    "test/**/*.tsx",
-    "vite.config.ts",
-    "tailwind.config.ts"
-  ],
+  "include": ["src/**/*.ts", "src/**/*.tsx", "test/**/*.ts", "test/**/*.tsx", "vite.config.ts"],
   "exclude": ["node_modules", "dist", "playwright-report", "test-results"]
 }

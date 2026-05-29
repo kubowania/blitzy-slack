@@ -84,8 +84,11 @@ export interface FileAttachment {
   mimeType: string;
   /** Size in bytes. */
   sizeBytes: number;
-  /** Database id of the uploading user. */
-  uploadedById: string;
+  /**
+   * Database id of the uploading user, or `null` when the uploader account
+   * has been removed (the `File.uploadedById` relation is `ON DELETE SET NULL`).
+   */
+  uploadedById: string | null;
   /** ISO 8601 timestamp of upload. */
   createdAt: string;
   /**

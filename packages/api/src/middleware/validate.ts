@@ -1,10 +1,21 @@
 import type { NextFunction, Request, RequestHandler, Response } from 'express';
-import type { ZodTypeAny } from 'zod';
+import type { ZodError, ZodTypeAny } from 'zod';
+
+import { ValidationError } from './errors.js';
 
 /**
  * Which property of the Express `Request` object to validate.
  */
 type ValidateTarget = 'body' | 'query' | 'params';
+
+/**
+ * Wrap a Zod failure in the project `ValidationError` (HTTP 400) so the
+ * centralized error-handler maps every validation failure uniformly. The
+ * flattened field errors are attached as `details` for per-field feedback.
+ */
+function toValidationError(error: ZodError, source: ValidateTarget): ValidationError {
+  return new ValidationError(`Invalid request ${source}`, error.flatten().fieldErrors);
+}
 
 /**
  * Multi-source schema map for the overload that validates multiple request
@@ -49,8 +60,9 @@ export function validate(schemas: ValidateSchemas): RequestHandler;
  * Implementation of both overloads. The runtime dispatches based on
  * whether the first argument is a single Zod schema or a schemas map.
  *
- * On any validation failure the Zod `ZodError` is passed to `next(err)`
- * so that the centralized `errorHandler` middleware maps it to a 400
+ * On any validation failure the Zod error is wrapped in the project
+ * `ValidationError` (HTTP 400) via `toValidationError` and passed to
+ * `next(err)` so the centralized `errorHandler` emits a uniform 400
  * response with field-level error details.
  */
 export function validate(
@@ -63,7 +75,7 @@ export function validate(
       if (schemas.body !== undefined) {
         const parsed = schemas.body.safeParse(req.body);
         if (!parsed.success) {
-          next(parsed.error);
+          next(toValidationError(parsed.error, 'body'));
           return;
         }
         const data: unknown = parsed.data;
@@ -73,7 +85,7 @@ export function validate(
       if (schemas.query !== undefined) {
         const parsed = schemas.query.safeParse(req.query);
         if (!parsed.success) {
-          next(parsed.error);
+          next(toValidationError(parsed.error, 'query'));
           return;
         }
         Object.assign(req.query, parsed.data);
@@ -82,7 +94,7 @@ export function validate(
       if (schemas.params !== undefined) {
         const parsed = schemas.params.safeParse(req.params);
         if (!parsed.success) {
-          next(parsed.error);
+          next(toValidationError(parsed.error, 'params'));
           return;
         }
         Object.assign(req.params, parsed.data);
@@ -97,7 +109,7 @@ export function validate(
     const source: unknown = req[target];
     const parsed = schema.safeParse(source);
     if (!parsed.success) {
-      next(parsed.error);
+      next(toValidationError(parsed.error, target));
       return;
     }
 

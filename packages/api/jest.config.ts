@@ -3,32 +3,20 @@ import type { Config } from 'jest';
 /**
  * Jest runner configuration for the `@app/api` package.
  *
- * Module system : ESM. The api package declares `"type": "module"`, so Jest runs
- *                 in experimental ESM mode (`node --experimental-vm-modules`, set by
- *                 the package.json `test` script) and ts-jest transforms `.ts` files
- *                 as ES modules.
- * rootDir       : `..` - this file lives in `test/`, so the project root resolves to
- *                 `packages/api/`. Hence `<rootDir>/src` is the source tree and
- *                 `<rootDir>/test` holds the test suites.
- * Coverage      : `collectCoverageFrom` targets the `src/services` layer; the global
- *                 `coverageThreshold` enforces the 80% line-coverage floor (Gate 13).
- *
- * Compliance:
- *   Rule 3   (AAP 0.8.1) - ts-jest type-checks every TypeScript file at test compile
- *                          time (diagnostics.warnOnly is false), so strict-mode
- *                          violations fail the test run.
- *   Gate 12  (AAP 0.8.2) - validation tests surface as ordinary failing assertions.
- *   Gate 13  (AAP 0.8.2) - coverage threshold gates the services layer.
- *   AAP 0.3.1 - pinned to jest 29.7.x + ts-jest 29.2.x.
- *
- * Decision rationale (config location, ts-jest ESM preset, workspace source
- * resolution, coverage thresholds, the @app workspace mapper, and the
- * package.json wiring) is recorded in /docs/decision-log.md - not inline -
- * per the Explainability rule.
+ * Module system : ESM. The api package declares `"type": "module"`, so Jest
+ *                 runs in experimental ESM mode (`node --experimental-vm-modules`,
+ *                 set by the package.json `test` script) and ts-jest transforms
+ *                 `.ts` files as ES modules.
+ * rootDir       : `.` - this file lives at the package root, so `<rootDir>/src`
+ *                 is the source tree and `<rootDir>/test` holds the test suites.
+ * Setup         : `<rootDir>/test/setup.ts` runs before each suite to establish
+ *                 deterministic test-environment variables.
+ * Coverage      : `collectCoverageFrom` targets the `src/services` layer; the
+ *                 global `coverageThreshold` enforces the line-coverage floor.
  */
 const config: Config = {
-  // Project root is one level up from this file (packages/api/).
-  rootDir: '..',
+  // Project root is the directory containing this file (packages/api/).
+  rootDir: '.',
 
   // ESM preset for ts-jest (the api package is "type": "module").
   preset: 'ts-jest/presets/default-esm',
@@ -39,6 +27,9 @@ const config: Config = {
   // Treat `.ts` modules as ESM so import/export syntax is preserved.
   extensionsToTreatAsEsm: ['.ts'],
 
+  // Establish test-environment variables before any suite module is imported.
+  setupFiles: ['<rootDir>/test/setup.ts'],
+
   // Discover suites only within the test/ folder; only files ending in `.test.ts`.
   // (test/setup.ts and this config are intentionally excluded by the glob.)
   testMatch: ['<rootDir>/test/**/*.test.ts'],
@@ -47,7 +38,7 @@ const config: Config = {
   testPathIgnorePatterns: ['/node_modules/', '/dist/', '/coverage/'],
 
   // Compile `.ts` files with ts-jest in ESM mode using the api tsconfig.
-  // `diagnostics.warnOnly: false` promotes TypeScript errors to test failures (Rule 3).
+  // `diagnostics.warnOnly: false` promotes TypeScript errors to test failures.
   transform: {
     '^.+\\.ts$': [
       'ts-jest',
@@ -91,8 +82,8 @@ const config: Config = {
   coverageDirectory: '<rootDir>/coverage',
   coverageReporters: ['text', 'text-summary', 'lcov', 'html'],
 
-  // Gate 13 floor: >=80% lines/functions/statements on the services layer.
-  // Branch coverage starts at 70% because error/ACL branches accrue more slowly.
+  // Coverage floor: 80% lines/functions/statements, 70% branches on the
+  // services layer.
   coverageThreshold: {
     global: {
       lines: 80,
@@ -102,8 +93,7 @@ const config: Config = {
     },
   },
 
-  // Per-test time budget. Raised above the 5s default to accommodate Socket.io
-  // suites that open multiple client connections through the Redis adapter.
+  // Per-test time budget (15s).
   testTimeout: 15_000,
 
   // Reporter verbosity and failure behaviour.

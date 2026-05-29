@@ -33,13 +33,13 @@
   --color-primary: oklch(0.491 0.125 248);
   --color-primary-foreground: oklch(0.985 0 0);
 
-  /* Slack-aubergine sidebar palette */
-  --color-sidebar: oklch(0.272 0.101 327);
+  /* Slack-aubergine sidebar palette (AAP §0.5.3 token contract) */
+  --color-sidebar-bg: oklch(0.272 0.101 327);
+  --color-sidebar-hover: oklch(0.37 0.09 323);
   --color-sidebar-foreground: oklch(0.94 0.022 320);
+  --color-sidebar-hover-foreground: oklch(0.985 0 0);
   --color-sidebar-primary: oklch(0.491 0.125 248);
   --color-sidebar-primary-foreground: oklch(0.985 0 0);
-  --color-sidebar-accent: oklch(0.37 0.09 323);
-  --color-sidebar-accent-foreground: oklch(0.985 0 0);
   --color-sidebar-border: oklch(0.234 0.086 326);
   --color-sidebar-ring: oklch(0.545 0.096 323);
 }

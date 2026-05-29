@@ -47,7 +47,7 @@ model Channel {
   createdById String
   createdAt   DateTime @default(now())
 
-  createdBy User            @relation("ChannelCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
+  createdBy User            @relation("ChannelCreatedBy", fields: [createdById], references: [id], onDelete: Restrict, onUpdate: Cascade)
   members   ChannelMember[]
   messages  Message[]
 
@@ -62,8 +62,8 @@ model ChannelMember {
   role      String   @default("member")
   joinedAt  DateTime @default(now())
 
-  channel Channel @relation(fields: [channelId], references: [id], onDelete: Cascade)
-  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  channel Channel @relation(fields: [channelId], references: [id], onDelete: Cascade, onUpdate: Cascade)
+  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade, onUpdate: Cascade)
 
   @@unique([channelId, userId])
   @@index([channelId])
@@ -76,8 +76,8 @@ model DirectMessage {
   participantTwoId String
   createdAt        DateTime @default(now())
 
-  participantOne User            @relation("DMParticipantOne", fields: [participantOneId], references: [id], onDelete: Cascade)
-  participantTwo User            @relation("DMParticipantTwo", fields: [participantTwoId], references: [id], onDelete: Cascade)
+  participantOne User            @relation("DMParticipantOne", fields: [participantOneId], references: [id], onDelete: Cascade, onUpdate: Cascade)
+  participantTwo User            @relation("DMParticipantTwo", fields: [participantTwoId], references: [id], onDelete: Cascade, onUpdate: Cascade)
   participants   DMParticipant[]
   messages       Message[]
 
@@ -90,8 +90,8 @@ model DMParticipant {
   dmId   String
   userId String
 
-  dm   DirectMessage @relation(fields: [dmId], references: [id], onDelete: Cascade)
-  user User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  dm   DirectMessage @relation(fields: [dmId], references: [id], onDelete: Cascade, onUpdate: Cascade)
+  user User          @relation(fields: [userId], references: [id], onDelete: Cascade, onUpdate: Cascade)
 
   @@id([dmId, userId])
   @@index([userId])
@@ -107,14 +107,18 @@ model Message {
   fileId     String?                  @unique
   createdAt  DateTime                 @default(now())
   updatedAt  DateTime                 @updatedAt
+  // `contentTsv` is a STORED generated column created by raw SQL in migration
+  // 20260527000001_add_message_tsvector. The @default(dbgenerated(...)) below
+  // mirrors Prisma's introspection of that column, so `prisma migrate diff`
+  // reports no drift. See /docs/decision-log.md.
   contentTsv Unsupported("tsvector")? @default(dbgenerated("to_tsvector('english'::regconfig, (content)::text)"))
 
-  author    User              @relation(fields: [authorId], references: [id], onDelete: Cascade)
-  channel   Channel?          @relation(fields: [channelId], references: [id], onDelete: Cascade)
-  dm        DirectMessage?    @relation(fields: [dmId], references: [id], onDelete: Cascade)
+  author    User              @relation(fields: [authorId], references: [id], onDelete: Cascade, onUpdate: Cascade)
+  channel   Channel?          @relation(fields: [channelId], references: [id], onDelete: Cascade, onUpdate: Cascade)
+  dm        DirectMessage?    @relation(fields: [dmId], references: [id], onDelete: Cascade, onUpdate: Cascade)
   parent    Message?          @relation("MessageThread", fields: [parentId], references: [id], onDelete: NoAction, onUpdate: NoAction)
   replies   Message[]         @relation("MessageThread")
-  file      File?             @relation(fields: [fileId], references: [id], onDelete: SetNull)
+  file      File?             @relation(fields: [fileId], references: [id], onDelete: SetNull, onUpdate: Cascade)
   reactions MessageReaction[]
 
   @@index([channelId, createdAt(sort: Desc), id(sort: Desc)], map: "Message_channelId_createdAt_idx")
@@ -132,8 +136,8 @@ model MessageReaction {
   emoji     String   @db.VarChar(64)
   createdAt DateTime @default(now())
 
-  message Message @relation(fields: [messageId], references: [id], onDelete: Cascade)
-  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  message Message @relation(fields: [messageId], references: [id], onDelete: Cascade, onUpdate: Cascade)
+  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade, onUpdate: Cascade)
 
   @@unique([messageId, userId, emoji])
   @@index([messageId])
@@ -149,7 +153,7 @@ model File {
   uploadedById String?
   createdAt    DateTime @default(now())
 
-  uploadedBy User?    @relation(fields: [uploadedById], references: [id], onDelete: SetNull)
+  uploadedBy User?    @relation(fields: [uploadedById], references: [id], onDelete: SetNull, onUpdate: Cascade)
   message    Message?
 
   @@index([uploadedById])

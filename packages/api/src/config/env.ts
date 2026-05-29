@@ -2,42 +2,28 @@
  * Zod-validated environment-variable loader for the `@app/api` package.
  *
  * Loads a local `.env` (via dotenv), validates the full environment shape
- * against {@link EnvSchema}, and FAILS FAST (`process.exit(1)`) on any
- * validation error so the server never boots with invalid configuration. The
- * validated values are exposed as the immutable `env` singleton that every
- * other module in the package consumes.
+ * against {@link EnvSchema}, and throws a descriptive error on any validation
+ * failure so the server never boots with invalid configuration. The validated
+ * values are exposed as the immutable `env` singleton that every other module
+ * in the package consumes.
  *
- * This module is the BOTTOM of the API dependency tree: it has no internal
- * `src/*` imports and MUST be imported before any module that reads
- * configuration (logger, Redis, services, routes, socket handlers). Consumers
- * MUST import `env` instead of reading `process.env` directly (AAP §0.8.2
- * Gate 12 — every env var the API reads is validated here).
- *
- * `console.error` is used for the fail-fast diagnostic — and is the only
- * permitted `console` use in the API package — because the Pino logger depends
- * on this module and is therefore not yet constructed when validation runs.
- *
- * Rationale for the schema fields, the security minimums (JWT_SECRET ≥ 32
- * chars, BCRYPT_ROUNDS ≥ 10), and the fail-fast strategy is recorded in
- * /docs/decision-log.md; per the Explainability rule (AAP §0.8.3) this file
- * carries no embedded "why" rationale.
+ * This module is the bottom of the API dependency tree: it has no internal
+ * `src/*` imports and is imported before any module that reads configuration
+ * (logger, Redis, services, routes, socket handlers). Consumers import `env`
+ * instead of reading `process.env` directly (AAP §0.8.2 Gate 12).
  */
 import process from 'node:process';
 import { config as loadDotenv } from 'dotenv';
 import { z } from 'zod';
 
-// Populate process.env from a local `.env` if present. Silent and non-fatal
-// when the file is absent: values may instead come from the host environment,
-// Docker, or CI secrets. The default CWD lookup is what `make local` relies on.
+// Populate process.env from a local `.env` if present; an absent file is
+// non-fatal (values may come from the host environment, Docker, or CI).
 loadDotenv();
 
 /**
  * Runtime schema for every environment variable the API package consumes.
- *
- * Numeric fields use `z.coerce.number()` because all `process.env` values are
- * strings. `DATABASE_URL` / `REDIS_URL` additionally assert their URL scheme
- * so a mis-pasted connection string is rejected at startup rather than failing
- * deep inside Prisma or ioredis later.
+ * Numeric fields use `z.coerce.number()` to convert string env values;
+ * `DATABASE_URL` / `REDIS_URL` assert their URL scheme.
  */
 const EnvSchema = z.object({
   // Runtime mode; drives logger formatting and other environment branches.
@@ -73,16 +59,6 @@ const EnvSchema = z.object({
   LOG_LEVEL: z.enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace', 'silent']).optional(),
 });
 
-const result = EnvSchema.safeParse(process.env);
-
-if (!result.success) {
-  // The Pino logger depends on this module and is not constructed yet, so
-  // console.error is the sole permitted console use in the API package.
-  console.error('[env] Environment variable validation failed:');
-  console.error(JSON.stringify(result.error.format(), null, 2));
-  process.exit(1);
-}
-
 /**
  * Inferred shape of the validated environment. Exported so consumers that
  * accept the environment as a parameter (test helpers, factories) can
@@ -91,9 +67,25 @@ if (!result.success) {
 export type EnvShape = z.infer<typeof EnvSchema>;
 
 /**
- * The validated, immutable environment singleton. Parsed once at module load
- * and shared via Node's ESM module cache. After the fail-fast guard above,
- * `process.exit(1)` returns `never`, so TypeScript narrows `result` to its
- * success variant and `result.data` is fully typed with no cast.
+ * Validate `process.env` against {@link EnvSchema}, returning the typed result.
+ * Throws a descriptive {@link Error} listing every field issue when validation
+ * fails so the failure surfaces at module load (fail-fast) before any server
+ * or database connection is attempted.
  */
-export const env: EnvShape = result.data;
+function loadEnv(): EnvShape {
+  try {
+    return EnvSchema.parse(process.env);
+  } catch (error) {
+    if (error instanceof z.ZodError) {
+      const formatted = JSON.stringify(error.format(), null, 2);
+      throw new Error(`Environment variable validation failed:\n${formatted}`);
+    }
+    throw error;
+  }
+}
+
+/**
+ * The validated, immutable environment singleton. Parsed once at module load
+ * and shared via Node's ESM module cache.
+ */
+export const env: EnvShape = loadEnv();

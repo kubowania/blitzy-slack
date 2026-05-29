@@ -9,6 +9,5 @@ packages:
 onlyBuiltDependencies:
   - '@prisma/client'
   - 'prisma'
-  - 'bcrypt'
   - 'esbuild'
   - '@playwright/test'

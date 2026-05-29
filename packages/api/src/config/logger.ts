@@ -17,11 +17,7 @@
  * `.info()`/`.debug()`/etc. call triggers output, and in development that first
  * flush spawns the `pino-pretty` worker thread.
  *
- * Consumers MUST use this `logger` rather than `console`. Rationale for the
- * logger choice, the dev-only pretty transport, the redaction scope, the ISO
- * timestamp, the level formatter, the `LOG_LEVEL` override, and the
- * `Level | 'silent'` resolver return type is recorded in /docs/decision-log.md;
- * per the Explainability rule (AAP §0.8.3) this file carries no "why" rationale.
+ * Consumers use this `logger` rather than `console`.
  */
 import os from 'node:os';
 import process from 'node:process';
@@ -31,16 +27,9 @@ import type { Level, Logger, LoggerOptions } from 'pino';
 import { env } from './env.js';
 
 /**
- * Resolve the effective Pino level.
- *
- * `env.LOG_LEVEL`, when set, wins outright. Otherwise the level is derived from
- * the runtime mode: `debug` in development, `info` in test and production.
- *
- * The return type is `Level | 'silent'` rather than Pino's `Level`: Pino's
- * `Level` union omits `'silent'`, but `env.LOG_LEVEL` (validated in `env.ts` as
- * `z.enum(['fatal','error','warn','info','debug','trace','silent']).optional()`)
- * may legitimately be `'silent'`. `Level | 'silent'` is structurally identical
- * to Pino's `LevelWithSilent` and assignable to `LoggerOptions.level`.
+ * Resolve the effective Pino level: `env.LOG_LEVEL` when set, otherwise `debug`
+ * in development and `info` in test and production. The return type
+ * `Level | 'silent'` mirrors Pino's `LevelWithSilent`.
  */
 function resolveLogLevel(): Level | 'silent' {
   if (env.LOG_LEVEL) {
@@ -56,15 +45,11 @@ function resolveLogLevel(): Level | 'silent' {
 /**
  * Base Pino configuration shared by every environment.
  *
- * - `base` seeds three fields on every line: the originating process id and
- *   hostname (for per-instance correlation under the horizontally-scaled
- *   Socket.io + Redis-adapter topology) and a static `service` identifier.
- *   It deliberately contains NOTHING else — never secrets from `env`.
+ * - `base` seeds `pid`, `hostname`, and a static `service` field on every line.
  * - `redact` replaces sensitive values with `[REDACTED]` while preserving the
- *   surrounding object shape (`remove: false`). The paths cover request
- *   headers/bodies handled by `pino-http`, bare top-level keys, and one level
- *   of nesting via `*` wildcards.
- * - `formatters.level` emits the string label (`"info"`) instead of Pino's
+ *   surrounding object shape (`remove: false`), covering request/response
+ *   headers and bodies, bare top-level keys, and one level of nesting.
+ * - `formatters.level` emits the string label (`"info"`) instead of the
  *   default numeric level (`30`).
  * - `timestamp` writes ISO 8601 UTC strings.
  */
@@ -77,17 +62,31 @@ const baseConfig: LoggerOptions = {
   },
   redact: {
     paths: [
+      // Authorization header + bearer tokens (header-scoped, bare, nested).
       'req.headers.authorization',
+      'res.headers.authorization',
+      'authorization',
+      '*.authorization',
+      // Cookies (request cookie + response set-cookie); bracket-quoted for the hyphen.
       'req.headers.cookie',
+      'req.headers["set-cookie"]',
+      'res.headers["set-cookie"]',
+      '["set-cookie"]',
+      // Passwords (request body, bare, nested).
       'req.body.password',
       'req.body.passwordHash',
-      'req.body.token',
       'password',
       'passwordHash',
-      'token',
       '*.password',
       '*.passwordHash',
+      // Generic tokens, secrets, and JWTs (bare + one level of nesting).
+      'req.body.token',
+      'token',
       '*.token',
+      'secret',
+      '*.secret',
+      'jwt',
+      '*.jwt',
     ],
     censor: '[REDACTED]',
     remove: false,
@@ -101,12 +100,8 @@ const baseConfig: LoggerOptions = {
 };
 
 /**
- * Build the singleton.
- *
- * Development attaches the `pino-pretty` transport (a worker thread that
- * colorizes and reformats output). Test and production return the raw-JSON
- * logger with no transport, keeping tests fast and output ingestible by log
- * aggregators.
+ * Build the singleton. Development attaches the `pino-pretty` transport;
+ * test and production return the raw-JSON logger with no transport.
  */
 function createLogger(): Logger {
   if (env.NODE_ENV === 'development') {

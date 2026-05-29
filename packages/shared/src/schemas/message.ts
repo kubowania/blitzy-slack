@@ -15,9 +15,10 @@ import {
  *   - a channel (`channelId` set, `dmId` null)
  *   - a direct-message conversation (`dmId` set, `channelId` null)
  *
- * The XOR refinement below enforces that exactly one of `channelId` /
- * `dmId` is provided. The route adapter populates the appropriate field
- * from the URL path parameter before calling `sendMessageSchema.parse()`.
+ * The XOR superRefinement below enforces that exactly one of `channelId` /
+ * `dmId` is provided, emitting field-level issues on both keys when the rule
+ * is violated. The route adapter populates the appropriate field from the URL
+ * path parameter before calling `sendMessageSchema.parse()`.
  *
  * `parentId` is set when the message is a thread reply (AAP §0.1.1
  * "Message threads — replies attached to a parent message via
@@ -28,8 +29,7 @@ import {
  * uploaded separately via `POST /api/files` first, and the resulting
  * `fileId` is passed here.
  *
- * `.strict()` rejects unknown keys to prevent prototype-pollution / over-
- * posting attacks; rationale recorded in /docs/decision-log.md.
+ * `.strict()` rejects unknown keys.
  */
 export const sendMessageSchema = z
   .object({
@@ -40,15 +40,44 @@ export const sendMessageSchema = z
     fileId: z.string().cuid().optional(),
   })
   .strict()
-  .refine(
-    (data) => Boolean(data.channelId) !== Boolean(data.dmId),
-    { message: 'Exactly one of channelId or dmId must be provided' },
-  );
+  .superRefine((data, ctx) => {
+    const hasChannel = Boolean(data.channelId);
+    const hasDm = Boolean(data.dmId);
+    if (hasChannel === hasDm) {
+      const message = hasChannel
+        ? 'Provide either channelId or dmId, not both'
+        : 'Either channelId or dmId is required';
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message, path: ['channelId'] });
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message, path: ['dmId'] });
+    }
+  });
 
 /**
  * Inferred TypeScript type for the validated send-message payload.
  */
 export type SendMessageInput = z.infer<typeof sendMessageSchema>;
+
+/**
+ * Code points permitted inside an emoji reaction: the Emoji property plus
+ * variation selector-16 (U+FE0F), the keycap combiner (U+20E3), the zero-width
+ * joiner (U+200D), and the tag characters (U+E0020–U+E007F) used by
+ * subdivision-flag sequences.
+ */
+const EMOJI_CODEPOINTS = /^(?:\p{Emoji}|\uFE0F|\u20E3|\u200D|[\u{E0020}-\u{E007F}])+$/u;
+
+/**
+ * Requires at least one pictographic, regional-indicator, or keycap element so
+ * that bare digits and punctuation (which carry the Emoji property) are rejected.
+ */
+const EMOJI_REQUIRES = /\p{Extended_Pictographic}|[\u{1F1E6}-\u{1F1FF}]|\u20E3/u;
+
+/**
+ * True when `value` is composed solely of emoji code points and contains at
+ * least one pictographic / flag / keycap element.
+ */
+function isStandardEmoji(value: string): boolean {
+  return EMOJI_CODEPOINTS.test(value) && EMOJI_REQUIRES.test(value);
+}
 
 /**
  * Validates the payload for adding (`POST /api/messages/:id/reactions`) or
@@ -59,19 +88,22 @@ export type SendMessageInput = z.infer<typeof sendMessageSchema>;
  * identical: identify the message (`messageId`) and the emoji (`emoji`).
  * The HTTP method discriminates add vs remove.
  *
- * `emoji` is bounded to MAX_EMOJI_LENGTH characters as a defensive cap
- * — Unicode emoji are typically 1–8 code points (e.g., 👨‍👩‍👧‍👦 is 7 code
- * points), and longer strings indicate abuse rather than valid input.
- * Strict Unicode-emoji-regex validation was rejected in favor of bare
- * length-bounded string validation; rationale recorded in
- * /docs/decision-log.md.
+ * `emoji` must be a standard Unicode emoji: every code point belongs to the
+ * emoji set (pictographs, skin-tone modifiers, variation selector-16, the
+ * keycap combiner, the zero-width joiner, regional indicators, and tag
+ * characters), and at least one pictographic / flag / keycap element is
+ * present. The MAX_EMOJI_LENGTH cap bounds ZWJ-sequence length.
  *
  * `.strict()` rejects unknown keys.
  */
 export const reactionSchema = z
   .object({
     messageId: z.string().cuid(),
-    emoji: z.string().min(1).max(MAX_EMOJI_LENGTH),
+    emoji: z
+      .string()
+      .min(1)
+      .max(MAX_EMOJI_LENGTH)
+      .refine(isStandardEmoji, { message: 'emoji must be a standard Unicode emoji' }),
   })
   .strict();
 

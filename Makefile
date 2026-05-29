@@ -7,8 +7,8 @@ include .env
 export
 endif
 
-API_PORT ?= 3000
-API_HEALTH_URL ?= http://localhost:$(API_PORT)/api/health
+PORT ?= 3000
+API_HEALTH_URL ?= http://localhost:$(PORT)/api/health
 
 .PHONY: help local up down clean install migrate seed build lint format typecheck test test-e2e
 

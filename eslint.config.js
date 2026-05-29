@@ -92,16 +92,14 @@ export default tseslint.config(
   // 7. Workspace-wide rule overrides that enforce Rule 3.
   {
     rules: {
-      // `@ts-ignore` and `@ts-nocheck` are forbidden; `@ts-expect-error` is
-      // permitted only with a descriptive justification of meaningful length.
+      // Rule 3 forbids `@ts-ignore`, `@ts-expect-error`, and `@ts-nocheck`.
       '@typescript-eslint/ban-ts-comment': [
         'error',
         {
           'ts-ignore': true,
-          'ts-expect-error': 'allow-with-description',
+          'ts-expect-error': true,
           'ts-nocheck': true,
           'ts-check': false,
-          minimumDescriptionLength: 20,
         },
       ],
       // Unused variables, arguments and caught errors are errors; an underscore

@@ -1,40 +1,32 @@
 /**
  * scripts/seed-via-api.ts — Test user seed via the registration flow.
  *
- * Rule 4 (AAP §0.8.1) mandates that the seed user `admin@test.com` /
- * `Password12345!` is created by calling `POST /api/auth/register`, NOT by
- * issuing a direct database INSERT. This file is the sole code path that
- * fulfills that rule.
+ * Creates the seed user `admin@test.com` / `Password12345!` by calling
+ * `POST /api/auth/register` (Rule 4, AAP §0.8.1) after polling
+ * `GET /api/health` until the API reports ready.
  *
  * Dual invocation modes:
+ *   1. CLI (`make seed` → `pnpm exec tsx scripts/seed-via-api.ts`): detected via
+ *      `process.argv[1] === fileURLToPath(import.meta.url)`; exits 0 on success,
+ *      1 on failure.
+ *   2. Playwright globalSetup (referenced in `playwright.config.ts`): the default
+ *      export is awaited; errors bubble to Playwright. Both modes run through
+ *      `seedTestUser()`, so the health gate applies to both.
  *
- *   1. CLI mode (invoked by `make seed` → `pnpm exec tsx scripts/seed-via-api.ts`):
- *      Detected via `process.argv[1] === fileURLToPath(import.meta.url)`.
- *      Runs seedTestUser() and exits 0 on success, 1 on failure.
+ * Idempotent: HTTP 201 (created) and HTTP 409 (already exists) are both success;
+ * any other status, a network error, or a timeout is a failure.
  *
- *   2. Playwright globalSetup mode (referenced as `./scripts/seed-via-api.ts`
- *      in `playwright.config.ts`): Playwright imports this module and invokes
- *      the default export, which awaits seedTestUser(). Errors bubble to
- *      Playwright which fails the test run.
- *
- * Idempotent semantics: HTTP 201 (newly created) AND HTTP 409 (already exists)
- * are both treated as success. Any other status — including network errors
- * and the 60-second AbortController timeout — is a failure.
- *
- * No workspace package imports: the script is self-contained for simplicity
- * and to keep tsx ESM resolution trivial. The body shape is the hardcoded
- * test-user record, which by definition matches registerSchema in
- * packages/shared/src/schemas/auth.ts.
- *
- * Rationale for native fetch over node-fetch/axios, dual-mode design, the
- * 60s timeout, and 409-as-success is recorded in /docs/decision-log.md per
- * the Explainability rule (AAP §0.8.3).
+ * Rationale and trade-offs for the decisions in this file are recorded in
+ * docs/decision-log.md (Explainability rule, AAP §0.8.3).
  */
 
 import { fileURLToPath } from 'node:url';
 
 const DEFAULT_API_URL = 'http://localhost:3000';
 const SEED_TIMEOUT_MS = 60_000;
+const HEALTH_TIMEOUT_MS = 60_000;
+const HEALTH_POLL_INTERVAL_MS = 1_000;
+const HEALTH_REQUEST_TIMEOUT_MS = 5_000;
 const SEED_USER = {
   email: 'admin@test.com',
   password: 'Password12345!',
@@ -46,9 +38,53 @@ interface SeedResult {
   httpStatus: number;
 }
 
+/**
+ * Polls `GET ${apiUrl}/api/health` until it responds 2xx or the timeout
+ * elapses. Each poll is bounded by its own AbortController so a hung socket
+ * cannot stall the loop. Resolves when healthy; throws on timeout.
+ */
+async function waitForApiHealth(apiUrl: string): Promise<void> {
+  const healthUrl = `${apiUrl}/api/health`;
+  const deadline = Date.now() + HEALTH_TIMEOUT_MS;
+  let lastError = 'no response yet';
+
+  console.info(`[seed] Waiting for API health at ${healthUrl} (timeout ${HEALTH_TIMEOUT_MS}ms)`);
+
+  while (Date.now() < deadline) {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => {
+      controller.abort();
+    }, HEALTH_REQUEST_TIMEOUT_MS);
+    try {
+      const res = await fetch(healthUrl, {
+        method: 'GET',
+        headers: { Accept: 'application/json' },
+        signal: controller.signal,
+      });
+      if (res.ok) {
+        console.info(`[seed] API healthy (${res.status})`);
+        return;
+      }
+      lastError = `HTTP ${res.status} ${res.statusText}`;
+    } catch (err: unknown) {
+      lastError = err instanceof Error ? err.message : String(err);
+    } finally {
+      clearTimeout(timeoutId);
+    }
+    await new Promise<void>((resolve) => setTimeout(resolve, HEALTH_POLL_INTERVAL_MS));
+  }
+
+  throw new Error(
+    `API did not become healthy at ${healthUrl} within ${HEALTH_TIMEOUT_MS}ms ` +
+      `(last error: ${lastError}). Is the API server running and reachable?`,
+  );
+}
+
 async function seedTestUser(): Promise<SeedResult> {
   const apiUrl = process.env.VITE_API_URL ?? DEFAULT_API_URL;
   const registerUrl = `${apiUrl}/api/auth/register`;
+
+  await waitForApiHealth(apiUrl);
 
   console.info(`[seed] POST ${registerUrl} (email=${SEED_USER.email})`);
 
