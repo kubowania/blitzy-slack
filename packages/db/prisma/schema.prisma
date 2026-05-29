@@ -1,16 +1,157 @@
-// Prisma schema (SETUP STUB).
-// Datasource + generator only. The full data model (User, Channel,
-// ChannelMember, DirectMessage, DMParticipant, Message, MessageReaction, File)
-// and the tsvector full-text-search migration are authored by downstream
-// code-generation agents per AAP section 0.4.4. This stub is intentionally
-// model-free so `prisma validate` / `prisma generate` succeed against a clean
-// install and confirm toolchain compatibility.
+// Blitzy Slack — Database schema (Prisma 6).
+//
+// Single source of truth for all DB models. Migrations are generated from this
+// file (`pnpm --filter @app/db migrate:dev`) and committed under
+// packages/db/prisma/migrations/ (Gate 2).
+//
+// Rationale for cascade behavior, the tsvector full-text-search strategy, and
+// other non-trivial decisions lives in /docs/decision-log.md — NOT here.
 
 generator client {
-  provider = "prisma-client-js"
+  provider        = "prisma-client-js"
+  binaryTargets   = ["native", "linux-musl-openssl-3.0.x"]
+  previewFeatures = ["fullTextSearchPostgres"]
 }
 
 datasource db {
   provider = "postgresql"
   url      = env("DATABASE_URL")
+}
+
+model User {
+  id           String   @id @default(cuid())
+  email        String   @unique
+  passwordHash String
+  displayName  String   @db.VarChar(80)
+  avatarUrl    String?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  channelsCreated     Channel[]         @relation("ChannelCreatedBy")
+  channelMembers      ChannelMember[]
+  dmsAsParticipantOne DirectMessage[]   @relation("DMParticipantOne")
+  dmsAsParticipantTwo DirectMessage[]   @relation("DMParticipantTwo")
+  dmParticipations    DMParticipant[]
+  messages            Message[]
+  reactions           MessageReaction[]
+  uploadedFiles       File[]
+
+  @@index([email])
+}
+
+model Channel {
+  id          String   @id @default(cuid())
+  name        String   @unique @db.VarChar(80)
+  description String?  @db.VarChar(250)
+  isPrivate   Boolean  @default(false)
+  createdById String
+  createdAt   DateTime @default(now())
+
+  createdBy User            @relation("ChannelCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
+  members   ChannelMember[]
+  messages  Message[]
+
+  @@index([name])
+  @@index([createdById])
+}
+
+model ChannelMember {
+  id        String   @id @default(cuid())
+  channelId String
+  userId    String
+  role      String   @default("member")
+  joinedAt  DateTime @default(now())
+
+  channel Channel @relation(fields: [channelId], references: [id], onDelete: Cascade)
+  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([channelId, userId])
+  @@index([channelId])
+  @@index([userId])
+}
+
+model DirectMessage {
+  id               String   @id @default(cuid())
+  participantOneId String
+  participantTwoId String
+  createdAt        DateTime @default(now())
+
+  participantOne User            @relation("DMParticipantOne", fields: [participantOneId], references: [id], onDelete: Cascade)
+  participantTwo User            @relation("DMParticipantTwo", fields: [participantTwoId], references: [id], onDelete: Cascade)
+  participants   DMParticipant[]
+  messages       Message[]
+
+  @@unique([participantOneId, participantTwoId])
+  @@index([participantOneId])
+  @@index([participantTwoId])
+}
+
+model DMParticipant {
+  dmId   String
+  userId String
+
+  dm   DirectMessage @relation(fields: [dmId], references: [id], onDelete: Cascade)
+  user User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@id([dmId, userId])
+  @@index([userId])
+}
+
+model Message {
+  id         String                   @id @default(cuid())
+  content    String                   @db.VarChar(4000)
+  authorId   String
+  channelId  String?
+  dmId       String?
+  parentId   String?
+  fileId     String?                  @unique
+  createdAt  DateTime                 @default(now())
+  updatedAt  DateTime                 @updatedAt
+  contentTsv Unsupported("tsvector")? @default(dbgenerated("to_tsvector('english'::regconfig, (content)::text)"))
+
+  author    User              @relation(fields: [authorId], references: [id], onDelete: Cascade)
+  channel   Channel?          @relation(fields: [channelId], references: [id], onDelete: Cascade)
+  dm        DirectMessage?    @relation(fields: [dmId], references: [id], onDelete: Cascade)
+  parent    Message?          @relation("MessageThread", fields: [parentId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  replies   Message[]         @relation("MessageThread")
+  file      File?             @relation(fields: [fileId], references: [id], onDelete: SetNull)
+  reactions MessageReaction[]
+
+  @@index([channelId, createdAt(sort: Desc), id(sort: Desc)], map: "Message_channelId_createdAt_idx")
+  @@index([dmId, createdAt(sort: Desc), id(sort: Desc)], map: "Message_dmId_createdAt_idx")
+  @@index([parentId])
+  @@index([authorId])
+  @@index([createdAt(sort: Desc), id(sort: Desc)], map: "Message_createdAt_idx")
+  @@index([contentTsv], type: Gin)
+}
+
+model MessageReaction {
+  id        String   @id @default(cuid())
+  messageId String
+  userId    String
+  emoji     String   @db.VarChar(64)
+  createdAt DateTime @default(now())
+
+  message Message @relation(fields: [messageId], references: [id], onDelete: Cascade)
+  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([messageId, userId, emoji])
+  @@index([messageId])
+  @@index([userId])
+}
+
+model File {
+  id           String   @id @default(cuid())
+  originalName String   @db.VarChar(255)
+  storedName   String   @unique @db.VarChar(255)
+  mimeType     String   @db.VarChar(255)
+  sizeBytes    Int
+  uploadedById String?
+  createdAt    DateTime @default(now())
+
+  uploadedBy User?    @relation(fields: [uploadedById], references: [id], onDelete: SetNull)
+  message    Message?
+
+  @@index([uploadedById])
+  @@index([createdAt])
 }
