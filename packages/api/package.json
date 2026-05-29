@@ -2,14 +2,33 @@
   "name": "@app/api",
   "version": "0.1.0",
   "private": true,
+  "license": "UNLICENSED",
+  "description": "Express 5 + Socket.io 4.8 HTTP and WebSocket server for the Blitzy Slack PoC.",
   "type": "module",
   "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "dist",
+    "src",
+    "README.md"
+  ],
   "scripts": {
-    "dev": "tsx watch src/index.ts",
+    "dev": "tsx watch --clear-screen=false src/index.ts",
     "build": "tsc -p tsconfig.json",
     "start": "node dist/index.js",
+    "test": "node --experimental-vm-modules node_modules/jest/bin/jest.js --passWithNoTests",
+    "test:watch": "node --experimental-vm-modules node_modules/jest/bin/jest.js --watch",
+    "test:coverage": "node --experimental-vm-modules node_modules/jest/bin/jest.js --coverage --passWithNoTests",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "node --experimental-vm-modules node_modules/jest/bin/jest.js --passWithNoTests"
+    "lint": "eslint . --max-warnings 0",
+    "clean": "rm -rf dist coverage"
   },
   "dependencies": {
     "@app/db": "workspace:*",
@@ -36,12 +55,11 @@
     "@types/jest": "^29.5.0",
     "@types/jsonwebtoken": "^9.0.0",
     "@types/multer": "^1.4.0",
-    "@types/node": "^22.0.0",
     "@types/supertest": "^6.0.0",
     "jest": "^29.7.0",
     "pino-pretty": "^11.0.0",
     "supertest": "^7.0.0",
     "ts-jest": "^29.2.0",
-    "typescript": "^5.7.0"
+    "tsx": "^4.0.0"
   }
 }
