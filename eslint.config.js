@@ -131,11 +131,12 @@ export default tseslint.config(
     },
   },
 
-  // 9. JavaScript config files, root `*.config.ts`, and `scripts/**` are not
-  //    members of any package tsconfig, so type-aware rules cannot run on them.
-  //    Disable type checking for these files while keeping all syntactic rules.
+  // 9. JavaScript config files, root `*.config.ts`, `scripts/**`, and the Prisma
+  //    `db seed` delegate (`**/prisma/seed.ts`) are not members of any package
+  //    tsconfig, so type-aware rules cannot run on them. Disable type checking
+  //    for these files while keeping all syntactic rules.
   {
-    files: ['**/*.{js,cjs,mjs}', '*.config.ts', 'scripts/**/*.ts'],
+    files: ['**/*.{js,cjs,mjs}', '*.config.ts', 'scripts/**/*.ts', '**/prisma/seed.ts'],
     ...tseslint.configs.disableTypeChecked,
   },
 
