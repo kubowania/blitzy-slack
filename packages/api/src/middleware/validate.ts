@@ -66,7 +66,8 @@ export function validate(
           next(parsed.error);
           return;
         }
-        req.body = parsed.data;
+        const data: unknown = parsed.data;
+        req.body = data;
       }
 
       if (schemas.query !== undefined) {
@@ -93,17 +94,18 @@ export function validate(
 
   const schema = schemaOrMap;
   return (req: Request, _res: Response, next: NextFunction): void => {
-    const source = req[target];
+    const source: unknown = req[target];
     const parsed = schema.safeParse(source);
     if (!parsed.success) {
       next(parsed.error);
       return;
     }
 
+    const data: unknown = parsed.data;
     if (target === 'body') {
-      req.body = parsed.data;
+      req.body = data;
     } else {
-      Object.assign(req[target], parsed.data);
+      Object.assign(req[target], data);
     }
 
     next();
