@@ -1,0 +1,238 @@
+import type { ZodType } from 'zod';
+
+import { useAuthStore } from '@/stores/auth.store';
+
+/**
+ * Base URL for HTTP API calls. Sourced from `VITE_API_URL` at module
+ * load and normalized to omit any trailing slash so that path joins
+ * produce a single `/` separator.
+ */
+const BASE_URL: string = import.meta.env.VITE_API_URL.replace(/\/$/, '');
+
+/**
+ * Structured error thrown by every `apiClient` method on any non-2xx
+ * response or network failure. Callers should `catch` this type and
+ * surface `.status` / `.body` to the user (typically via Sonner toast).
+ *
+ * Network failures (fetch rejections) are normalized to `status === 0`
+ * with `body === null` so callers see a uniform shape.
+ */
+export class ApiError extends Error {
+  public readonly status: number;
+  public readonly body: unknown;
+
+  constructor(message: string, status: number, body: unknown) {
+    super(message);
+    this.name = 'ApiError';
+    this.status = status;
+    this.body = body;
+  }
+}
+
+/**
+ * Per-call options accepted by every `apiClient` method.
+ *
+ * - `schema`: optional Zod schema validating the response body. When
+ *   provided, the response is parsed via `schema.parse(...)`, so the
+ *   returned value is statically typed AND runtime-validated.
+ * - `signal`: optional `AbortSignal` for cancellation (e.g., paired
+ *   with TanStack Query's per-query signal).
+ * - `headers`: optional extra headers merged into the request.
+ */
+export interface RequestOptions<T> {
+  schema?: ZodType<T>;
+  signal?: AbortSignal;
+  headers?: Record<string, string>;
+}
+
+/**
+ * Constructs the Authorization header from the Zustand auth store.
+ * Returns an empty object when no token is set so that unauthenticated
+ * endpoints (e.g., `/api/auth/register`, `/api/auth/login`) succeed.
+ */
+function authHeader(): Record<string, string> {
+  const token = useAuthStore.getState().token;
+  return token === null ? {} : { Authorization: `Bearer ${token}` };
+}
+
+/**
+ * Joins a base URL and a relative path, tolerating either form of the
+ * path (with or without leading slash).
+ */
+function buildUrl(path: string): string {
+  if (path.startsWith('http://') || path.startsWith('https://')) {
+    return path;
+  }
+  const normalized = path.startsWith('/') ? path : `/${path}`;
+  return `${BASE_URL}${normalized}`;
+}
+
+/**
+ * Parses a Response's body as JSON when possible, falling back to text,
+ * and finally to `null` if the body is absent or unparsable. Never
+ * throws.
+ */
+async function parseBody(response: Response): Promise<unknown> {
+  const contentType = response.headers.get('content-type') ?? '';
+  if (response.status === 204 || response.headers.get('content-length') === '0') {
+    return null;
+  }
+  if (contentType.includes('application/json')) {
+    try {
+      return (await response.json()) as unknown;
+    } catch {
+      return null;
+    }
+  }
+  try {
+    const text = await response.text();
+    return text === '' ? null : text;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Extracts a human-readable error message from a parsed error body.
+ * The API's error-handler middleware emits `{ error: string, ... }`
+ * but the client must also tolerate other shapes.
+ */
+function extractErrorMessage(body: unknown, fallback: string): string {
+  if (typeof body === 'string' && body.length > 0) {
+    return body;
+  }
+  if (body !== null && typeof body === 'object' && 'error' in body) {
+    const value = body.error;
+    if (typeof value === 'string' && value.length > 0) {
+      return value;
+    }
+  }
+  if (body !== null && typeof body === 'object' && 'message' in body) {
+    const value = body.message;
+    if (typeof value === 'string' && value.length > 0) {
+      return value;
+    }
+  }
+  return fallback;
+}
+
+/**
+ * Core request function shared by `get`, `post`, `del`, `upload`.
+ *
+ * Behavior:
+ *   1. Builds the final URL via `buildUrl(path)`.
+ *   2. Injects the Authorization header when a JWT is present in the
+ *      auth store.
+ *   3. Merges caller-provided headers AFTER the defaults so callers may
+ *      override (e.g., a custom `Accept` for downloads).
+ *   4. On a 401 response, invalidates the auth store (`logout()`) before
+ *      throwing so the UI redirects to `/login` and the WebSocket
+ *      singleton disconnects.
+ *   5. On a non-2xx response, throws `ApiError(message, status, body)`.
+ *   6. On a 2xx response with an empty body, returns `undefined as T`.
+ *   7. On a 2xx response with a body and a `schema` option, validates
+ *      the body via `schema.parse(...)` — ZodError propagates AS-IS.
+ *   8. On a fetch rejection (network failure), throws
+ *      `ApiError(message, 0, null)`.
+ */
+async function request<T>(
+  method: 'GET' | 'POST' | 'DELETE',
+  path: string,
+  body: unknown,
+  options?: RequestOptions<T>,
+): Promise<T> {
+  const isFormData = typeof FormData !== 'undefined' && body instanceof FormData;
+
+  const headers: Record<string, string> = {
+    Accept: 'application/json',
+    ...authHeader(),
+    ...(options?.headers ?? {}),
+  };
+
+  let payload: BodyInit | undefined;
+  if (body === undefined) {
+    payload = undefined;
+  } else if (isFormData) {
+    payload = body;
+  } else {
+    headers['Content-Type'] = headers['Content-Type'] ?? 'application/json';
+    payload = JSON.stringify(body);
+  }
+
+  let response: Response;
+  try {
+    response = await fetch(buildUrl(path), {
+      method,
+      headers,
+      body: payload,
+      signal: options?.signal,
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Network request failed';
+    throw new ApiError(message, 0, null);
+  }
+
+  if (response.status === 401) {
+    useAuthStore.getState().logout();
+    const errBody = await parseBody(response);
+    throw new ApiError(extractErrorMessage(errBody, 'Unauthorized'), 401, errBody);
+  }
+
+  if (!response.ok) {
+    const errBody = await parseBody(response);
+    throw new ApiError(
+      extractErrorMessage(errBody, `HTTP ${response.status}`),
+      response.status,
+      errBody,
+    );
+  }
+
+  const okBody = await parseBody(response);
+  if (okBody === null) {
+    return undefined as T;
+  }
+
+  if (options?.schema !== undefined) {
+    return options.schema.parse(okBody);
+  }
+
+  return okBody as T;
+}
+
+/**
+ * Typed HTTP client for the Slack-clone REST API.
+ *
+ * Endpoint surface (per AAP §0.6.1 and the folder spec):
+ *   - Auth:     POST /api/auth/register, POST /api/auth/login, GET /api/auth/me
+ *   - Channels: GET  /api/channels, POST /api/channels,
+ *               GET  /api/channels/:id/messages?cursor=&limit=50,
+ *               POST /api/channels/:id/join, POST /api/channels/:id/leave
+ *   - Messages: GET  /api/messages/:id/replies,
+ *               POST /api/messages/:id/reactions,
+ *               DELETE /api/messages/:id/reactions
+ *   - DMs:      GET  /api/dms, POST /api/dms, GET /api/dms/:id/messages
+ *   - Files:    POST /api/files (multipart), GET /api/files/:id
+ *   - Search:   GET  /api/search?q=
+ *   - Health:   GET  /api/health
+ *
+ * Each method is generic over the response type `T`. Pass a Zod schema
+ * via `options.schema` to validate the response at runtime and narrow
+ * `T` automatically via Zod's inference.
+ */
+export const apiClient = {
+  get<T>(path: string, options?: RequestOptions<T>): Promise<T> {
+    return request<T>('GET', path, undefined, options);
+  },
+
+  post<T>(path: string, body?: unknown, options?: RequestOptions<T>): Promise<T> {
+    return request<T>('POST', path, body, options);
+  },
+
+  del<T>(path: string, options?: RequestOptions<T>): Promise<T> {
+    return request<T>('DELETE', path, undefined, options);
+  },
+
+  upload<T>(path: string, formData: FormData, options?: RequestOptions<T>): Promise<T> {
+    return request<T>('POST', path, formData, options);
+  },
+} as const;
