@@ -2,29 +2,23 @@
  * Message service — message persistence, thread replies, and emoji reactions.
  *
  * Public surface:
- *   sendMessage(input)                          → MessageWithAuthor
- *   getReplies({ parentId, userId })            → MessageWithAuthor[]   (thread view)
- *   addReaction({ messageId, userId, emoji })   → MessageWithAuthor     (full message, post-mutation reactions)
- *   removeReaction({ messageId, userId, emoji}) → MessageWithAuthor     (full message, post-mutation reactions)
+ *   createMessage(input)                                     → MessageWithAuthor
+ *   listThreadReplies({ parentId, userId, cursor?, limit? }) → { messages, nextCursor }  (thread view)
+ *   addReaction({ messageId, userId, emoji })                → MessageWithAuthor  (full message, post-mutation reactions)
+ *   removeReaction({ messageId, userId, emoji})              → MessageWithAuthor  (full message, post-mutation reactions)
  *
  * Layering and behavioral contract:
  *  - Routes and socket handlers call this service and then emit the Socket.io
  *    events (`message:new`, `reaction:added`, `reaction:removed`) using the
  *    returned DTOs. This service NEVER touches Socket.io itself.
- *  - `sendMessage` enforces the channel/DM XOR invariant that the Prisma schema
- *    cannot express, performs access control, validates thread parentage, and
- *    validates file-attachment ownership.
+ *  - `createMessage` enforces the channel/DM XOR invariant that the Prisma
+ *    schema cannot express, performs access control, validates thread
+ *    parentage, and validates file-attachment ownership.
  *  - Reactions are toggled through the `(messageId, userId, emoji)` composite
  *    unique constraint: `addReaction` is an idempotent upsert and
  *    `removeReaction` is an idempotent delete.
- *  - `getReplies` returns thread replies oldest-first (chronological reading
- *    order) and is intentionally unpaginated.
- *
- * The rationale for the design choices in this file — single-level threads,
- * upsert/P2025 idempotency, the post-mutation re-fetch, file-attachment
- * authorization, the per-endpoint ordering direction, and the unpaginated
- * thread read — is recorded in /docs/decision-log.md, not in code comments
- * (Explainability rule, AAP §0.8.3).
+ *  - `listThreadReplies` returns thread replies oldest-first (chronological
+ *    reading order), paginated by an opaque (createdAt, id) cursor.
  */
 
 import { prisma, Prisma } from '@app/db';
@@ -38,12 +32,12 @@ import type {
 import { logger } from '../config/logger.js';
 import { ForbiddenError, NotFoundError, ValidationError } from '../middleware/errors.js';
 
-import { MAX_MESSAGE_LENGTH } from '@app/shared/constants/limits';
+import { MAX_MESSAGE_LENGTH, PAGE_SIZE, MAX_PAGE_SIZE } from '@app/shared/constants/limits';
 import type { MessageWithAuthor } from '@app/shared/types/message';
 import type { SendMessageInput, ReactionInput } from '@app/shared/schemas/message';
 
 /**
- * Input contract for {@link sendMessage}. Routes construct this after Zod
+ * Input contract for {@link createMessage}. Routes construct this after Zod
  * validation, populating `authorId` from the authenticated principal and the
  * channel/DM target from the URL path parameter.
  *
@@ -87,15 +81,96 @@ export interface ReactionServiceInput {
 }
 
 /**
- * Input contract for {@link getReplies}. `parentId` identifies the thread root;
- * `userId` is the authenticated caller, used for the ACL check on the parent's
- * channel/DM context.
+ * Input contract for {@link listThreadReplies}. `parentId` identifies the
+ * thread root; `userId` is the authenticated caller, used for the ACL check on
+ * the parent's channel/DM context. `cursor` is the opaque token returned as
+ * `nextCursor` by a previous page; `limit` defaults to {@link PAGE_SIZE} and is
+ * capped server-side at {@link MAX_PAGE_SIZE}.
  */
-export interface GetRepliesInput {
+export interface ListThreadRepliesInput {
   /** Database id of the parent (thread-root) message. */
   parentId: string;
   /** Database id of the authenticated caller. */
   userId: string;
+  /** Opaque pagination cursor returned by a previous page; omit for the first page. */
+  cursor?: string;
+  /** Requested page size; defaults to {@link PAGE_SIZE}, capped at {@link MAX_PAGE_SIZE}. */
+  limit?: number;
+}
+
+/**
+ * Result of {@link listThreadReplies}: the page of replies (oldest-first) and
+ * the cursor to fetch the next, newer page (or `null` when exhausted).
+ */
+export interface ListThreadRepliesResult {
+  /** The page of thread replies, oldest-first (chronological reading order). */
+  messages: MessageWithAuthor[];
+  /** Opaque cursor for the next page, or `null` when there are no more replies. */
+  nextCursor: string | null;
+}
+
+/**
+ * Internal decoded cursor payload. The wire form is a base64url-encoded JSON
+ * string of this shape; it identifies the boundary (newest already-returned)
+ * reply so the next page can fetch everything strictly newer.
+ */
+interface ReplyCursorPayload {
+  /** ISO 8601 `createdAt` of the boundary reply. */
+  createdAt: string;
+  /** Database id of the boundary reply (tie-breaker for equal timestamps). */
+  id: string;
+}
+
+/**
+ * Encode a {@link ReplyCursorPayload} as a URL-safe base64 token. The token is
+ * opaque to clients — they pass it back verbatim to fetch the next page.
+ */
+function encodeReplyCursor(payload: ReplyCursorPayload): string {
+  return Buffer.from(JSON.stringify(payload), 'utf8').toString('base64url');
+}
+
+/**
+ * Decode an opaque reply-pagination token back into a {@link ReplyCursorPayload}.
+ * Returns `null` for any malformed token (bad base64, invalid JSON, or a shape
+ * that lacks the required string `createdAt` / `id` fields) so the caller can
+ * surface a validation error rather than throwing here.
+ */
+function decodeReplyCursor(cursor: string): ReplyCursorPayload | null {
+  try {
+    const json = Buffer.from(cursor, 'base64url').toString('utf8');
+    const parsed = JSON.parse(json) as unknown;
+    if (
+      typeof parsed === 'object' &&
+      parsed !== null &&
+      'createdAt' in parsed &&
+      'id' in parsed &&
+      typeof (parsed as Record<string, unknown>).createdAt === 'string' &&
+      typeof (parsed as Record<string, unknown>).id === 'string'
+    ) {
+      return parsed as ReplyCursorPayload;
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Normalize a requested page size into the permitted range: an absent or
+ * non-positive value falls back to {@link PAGE_SIZE}; values above
+ * {@link MAX_PAGE_SIZE} are clamped; fractional values are floored.
+ */
+function resolveReplyLimit(input?: number): number {
+  if (input === undefined) {
+    return PAGE_SIZE;
+  }
+  if (input < 1) {
+    return PAGE_SIZE;
+  }
+  if (input > MAX_PAGE_SIZE) {
+    return MAX_PAGE_SIZE;
+  }
+  return Math.floor(input);
 }
 
 /**
@@ -197,30 +272,31 @@ function toMessageDto(
 
 /**
  * Verify the caller may post to / read from the given channel.
- *  - Public channel: always allowed (Slack semantics — public channels are
- *    discoverable and postable by any authenticated user).
- *  - Private channel: the caller must be a `ChannelMember`.
+ *
+ * Membership is required for ALL channels — public and private alike. A user
+ * must join a channel (becoming a `ChannelMember`) before creating, reading,
+ * threading, or reacting to its messages. Public channels remain discoverable
+ * through the channels service listing, but message operations are gated on
+ * membership so a non-member cannot post or react in a channel they have not
+ * joined.
  *
  * @throws {NotFoundError} when the channel does not exist.
- * @throws {ForbiddenError} when the channel is private and the caller is not a
- *   member.
+ * @throws {ForbiddenError} when the caller is not a member of the channel.
  */
 async function assertChannelAccess(channelId: string, userId: string): Promise<void> {
   const channel = await prisma.channel.findUnique({
     where: { id: channelId },
-    select: { id: true, isPrivate: true },
+    select: { id: true },
   });
   if (channel === null) {
     throw new NotFoundError('Channel not found');
   }
-  if (channel.isPrivate) {
-    const member = await prisma.channelMember.findUnique({
-      where: { channelId_userId: { channelId, userId } },
-      select: { id: true },
-    });
-    if (member === null) {
-      throw new ForbiddenError('You do not have access to this channel');
-    }
+  const member = await prisma.channelMember.findUnique({
+    where: { channelId_userId: { channelId, userId } },
+    select: { id: true },
+  });
+  if (member === null) {
+    throw new ForbiddenError('You do not have access to this channel');
   }
 }
 
@@ -263,7 +339,8 @@ async function assertDmAccess(dmId: string, userId: string): Promise<void> {
  *    unique), which propagates to the error handler.
  *
  * Access control:
- *  - Channel target: caller must be a member when the channel is private.
+ *  - Channel target: caller must be a member of the channel (public and private
+ *    alike).
  *  - DM target: caller must be a participant.
  *
  * @param input - author id, content, the channel/DM target, and the optional
@@ -276,7 +353,7 @@ async function assertDmAccess(dmId: string, userId: string): Promise<void> {
  * @throws {ForbiddenError} when the caller lacks access to the target or attempts
  *   to attach a file uploaded by someone else.
  */
-export async function sendMessage(
+export async function createMessage(
   input: SendMessageServiceInput,
 ): Promise<MessageWithAuthor> {
   const { authorId, content, channelId, dmId, parentId, fileId } = input;
@@ -371,32 +448,38 @@ export async function sendMessage(
       parentId: created.parentId,
       hasFile: created.fileId !== null,
     },
-    'messages.send.success',
+    'messages.createMessage.success',
   );
 
   return toMessageDto(created, authorId);
 }
 
 /**
- * List all replies to a parent message, oldest-first (chronological reading
- * order for the thread panel). Intentionally unpaginated — threads are short
- * and the UI loads the whole thread when the panel opens.
+ * List a parent message's replies, oldest-first (chronological reading order
+ * for the thread panel), paginated by an opaque cursor.
  *
  * Access control mirrors the parent's channel/DM access: a caller who can see
  * the parent can read its thread.
  *
- * @param input - the parent message id and the authenticated caller id.
- * @returns the reply messages as `MessageWithAuthor` DTOs, oldest-first; an
- *   empty array when the parent has no replies.
+ * Pagination: the cursor encodes the (createdAt, id) of the newest reply the
+ * caller has already loaded; the query fetches the rows strictly newer than
+ * that boundary, ordered `createdAt ASC, id ASC`, taking `limit + 1` rows so
+ * the extra "peek" row reveals whether a further (newer) page exists without a
+ * separate COUNT.
+ *
+ * @param input - the parent message id, caller id, optional cursor, and optional limit.
+ * @returns the page of replies (oldest-first) and the `nextCursor` (or `null`).
  * @throws {NotFoundError} when the parent message does not exist.
  * @throws {ForbiddenError} when the caller lacks access to the parent's channel/DM.
  * @throws {ValidationError} when the parent message has neither a channel nor a
- *   DM context (a defensive guard against a corrupted row).
+ *   DM context (a defensive guard against a corrupted row), or when a supplied
+ *   cursor is malformed.
  */
-export async function getReplies(
-  input: GetRepliesInput,
-): Promise<MessageWithAuthor[]> {
-  const { parentId, userId } = input;
+export async function listThreadReplies(
+  input: ListThreadRepliesInput,
+): Promise<ListThreadRepliesResult> {
+  const { parentId, userId, cursor } = input;
+  const limit = resolveReplyLimit(input.limit);
 
   const parent = await prisma.message.findUnique({
     where: { id: parentId },
@@ -415,9 +498,33 @@ export async function getReplies(
     throw new ValidationError('Parent message has no channel or DM context');
   }
 
-  const replies = await prisma.message.findMany({
-    where: { parentId },
+  const decodedCursor = cursor === undefined ? null : decodeReplyCursor(cursor);
+  if (cursor !== undefined && decodedCursor === null) {
+    throw new ValidationError('Invalid cursor');
+  }
+
+  // Replies are read oldest-first, so the cursor boundary fetches rows strictly
+  // NEWER than the last-seen reply (the mirror of the newest-first channel feed).
+  const cursorWhere: Prisma.MessageWhereInput =
+    decodedCursor === null
+      ? {}
+      : {
+          OR: [
+            { createdAt: { gt: new Date(decodedCursor.createdAt) } },
+            {
+              createdAt: new Date(decodedCursor.createdAt),
+              id: { gt: decodedCursor.id },
+            },
+          ],
+        };
+
+  const rows = await prisma.message.findMany({
+    where: {
+      parentId,
+      ...cursorWhere,
+    },
     orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+    take: limit + 1,
     include: {
       author: true,
       reactions: true,
@@ -426,12 +533,22 @@ export async function getReplies(
     },
   });
 
+  const hasMore = rows.length > limit;
+  const pageRows = hasMore ? rows.slice(0, limit) : rows;
+  const newest = pageRows[pageRows.length - 1];
+
+  const messages = pageRows.map((reply) => toMessageDto(reply, userId));
+  const nextCursor =
+    hasMore && newest !== undefined
+      ? encodeReplyCursor({ createdAt: newest.createdAt.toISOString(), id: newest.id })
+      : null;
+
   logger.debug(
-    { parentId, userId, count: replies.length },
-    'messages.getReplies.success',
+    { parentId, userId, count: messages.length, hasMore },
+    'messages.listThreadReplies.success',
   );
 
-  return replies.map((reply) => toMessageDto(reply, userId));
+  return { messages, nextCursor };
 }
 
 /**

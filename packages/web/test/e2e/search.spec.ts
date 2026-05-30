@@ -123,54 +123,79 @@ async function typeSearchQuery(page: Page, query: string): Promise<void> {
 test.describe('Full-Text Search', () => {
   test.describe('Basic Search', () => {
     test('finds a message by full-text search', async ({ page }) => {
-      const user = await registerUserViaApi();
-      const channel = await createChannelViaApi(user.token, uniqueChannelName('search'));
+      const { user, channel } =
+        await test.step('Provision a user and channel via the API', async () => {
+          const provisionedUser = await registerUserViaApi();
+          const provisionedChannel = await createChannelViaApi(
+            provisionedUser.token,
+            uniqueChannelName('search'),
+          );
+          return { user: provisionedUser, channel: provisionedChannel };
+        });
 
-      await loginViaUi(page, user.email, user.password);
-      await page.goto(`/app/channels/${channel.id}`);
-      await expect(page.getByRole('textbox')).toBeVisible({ timeout: 10_000 });
+      await test.step('Sign in and open the channel', async () => {
+        await loginViaUi(page, user.email, user.password);
+        await page.goto(`/app/channels/${channel.id}`);
+        await expect(page.getByRole('textbox')).toBeVisible({ timeout: 10_000 });
+      });
 
-      // Send a unique message so the search query can only match this test's row.
-      const uniquePhrase = `uniquephrase${Date.now()}`;
-      await sendMessageViaUi(page, uniquePhrase);
-      await expect(page.getByText(uniquePhrase)).toBeVisible({ timeout: 5_000 });
+      const uniquePhrase =
+        await test.step('Post a unique message that only this test can match', async () => {
+          // Send a unique message so the search query can only match this test's row.
+          const phrase = `uniquephrase${Date.now()}`;
+          await sendMessageViaUi(page, phrase);
+          await expect(page.getByText(phrase)).toBeVisible({ timeout: 5_000 });
+          return phrase;
+        });
 
-      await focusSearchBar(page);
-      await typeSearchQuery(page, uniquePhrase);
-
-      // The query may render results inline or on /app/search; either way the
-      // unique phrase must surface in a result context.
-      await expect(page.getByText(uniquePhrase).first()).toBeVisible({ timeout: 5_000 });
+      await test.step('Search for the phrase and assert it surfaces in results', async () => {
+        await focusSearchBar(page);
+        await typeSearchQuery(page, uniquePhrase);
+        // The query may render results inline or on /app/search; either way the
+        // unique phrase must surface in a result context.
+        await expect(page.getByText(uniquePhrase).first()).toBeVisible({ timeout: 5_000 });
+      });
     });
   });
 
   test.describe('Performance Budget (Gate 9)', () => {
     test('returns search results within 2 seconds', async ({ page }) => {
-      const user = await registerUserViaApi();
-      const channel = await createChannelViaApi(user.token, uniqueChannelName('perf'));
+      const { user, channel } =
+        await test.step('Provision a user and channel via the API', async () => {
+          const provisionedUser = await registerUserViaApi();
+          const provisionedChannel = await createChannelViaApi(
+            provisionedUser.token,
+            uniqueChannelName('perf'),
+          );
+          return { user: provisionedUser, channel: provisionedChannel };
+        });
 
-      await loginViaUi(page, user.email, user.password);
-      await page.goto(`/app/channels/${channel.id}`);
-      await expect(page.getByRole('textbox')).toBeVisible({ timeout: 10_000 });
+      await test.step('Sign in and open the channel', async () => {
+        await loginViaUi(page, user.email, user.password);
+        await page.goto(`/app/channels/${channel.id}`);
+        await expect(page.getByRole('textbox')).toBeVisible({ timeout: 10_000 });
+      });
 
-      const uniquePhrase = `perfsearch${Date.now()}`;
-      await sendMessageViaUi(page, uniquePhrase);
-      await expect(page.getByText(uniquePhrase)).toBeVisible({ timeout: 5_000 });
+      const uniquePhrase = await test.step('Post a unique message to search for', async () => {
+        const phrase = `perfsearch${Date.now()}`;
+        await sendMessageViaUi(page, phrase);
+        await expect(page.getByText(phrase)).toBeVisible({ timeout: 5_000 });
+        // The tsvector column is populated in the same transaction as the insert;
+        // a short buffer simply guards against scheduling jitter.
+        await page.waitForTimeout(200);
+        return phrase;
+      });
 
-      // The tsvector column is populated in the same transaction as the insert;
-      // a short buffer simply guards against scheduling jitter.
-      await page.waitForTimeout(200);
-
-      await focusSearchBar(page);
-
-      // Measure typing + debounce + round-trip + render against the Gate 9 budget.
-      const startTime = Date.now();
-      await typeSearchQuery(page, uniquePhrase);
-      await expect(page.getByText(uniquePhrase).first()).toBeVisible({ timeout: 5_000 });
-      const endTime = Date.now();
-
-      const deltaMs = endTime - startTime;
-      expect(deltaMs).toBeLessThan(2_000);
+      await test.step('Measure search latency against the Gate 9 < 2 s budget', async () => {
+        await focusSearchBar(page);
+        // Measure typing + debounce + round-trip + render against the Gate 9 budget.
+        const startTime = Date.now();
+        await typeSearchQuery(page, uniquePhrase);
+        await expect(page.getByText(uniquePhrase).first()).toBeVisible({ timeout: 5_000 });
+        const endTime = Date.now();
+        const deltaMs = endTime - startTime;
+        expect(deltaMs).toBeLessThan(2_000);
+      });
     });
   });
 
@@ -178,161 +203,228 @@ test.describe('Full-Text Search', () => {
     test('does not return messages from private channels the user is not a member of', async ({
       request,
     }) => {
-      const owner = await registerUserViaApi();
-      const outsider = await registerUserViaApi();
-      const privateChannel = await createChannelViaApi(
-        owner.token,
-        uniqueChannelName('private'),
-        true,
-      );
+      const { owner, outsider, privateChannel } =
+        await test.step('Provision an owner, an outsider, and a private channel', async () => {
+          const provisionedOwner = await registerUserViaApi();
+          const provisionedOutsider = await registerUserViaApi();
+          const channel = await createChannelViaApi(
+            provisionedOwner.token,
+            uniqueChannelName('private'),
+            true,
+          );
+          return {
+            owner: provisionedOwner,
+            outsider: provisionedOutsider,
+            privateChannel: channel,
+          };
+        });
 
       const aclPhrase = `aclsecret${Date.now()}`;
 
-      // Seed a message into the private channel as the owner through the public
-      // API (Rule 4 — never a direct DB insert). Two endpoint shapes are tried.
-      const apiUrl = resolveApiUrl();
-      let seeded = await request.post(`${apiUrl}/api/channels/${privateChannel.id}/messages`, {
-        headers: { Authorization: `Bearer ${owner.token}` },
-        data: { content: aclPhrase },
-      });
-      if (!seeded.ok()) {
-        seeded = await request.post(`${apiUrl}/api/messages`, {
+      await test.step('Seed a message into the private channel via the public API', async () => {
+        // Seed a message into the private channel as the owner through the public
+        // API (Rule 4 - never a direct DB insert). Two endpoint shapes are tried.
+        const apiUrl = resolveApiUrl();
+        let seeded = await request.post(`${apiUrl}/api/channels/${privateChannel.id}/messages`, {
           headers: { Authorization: `Bearer ${owner.token}` },
-          data: { channelId: privateChannel.id, content: aclPhrase },
+          data: { content: aclPhrase },
         });
-      }
-      expect(seeded.ok()).toBe(true);
+        if (!seeded.ok()) {
+          seeded = await request.post(`${apiUrl}/api/messages`, {
+            headers: { Authorization: `Bearer ${owner.token}` },
+            data: { channelId: privateChannel.id, content: aclPhrase },
+          });
+        }
+        expect(seeded.ok()).toBe(true);
+        await sleep(200);
+      });
 
-      await sleep(200);
+      await test.step('Assert the outsider cannot see the private hit', async () => {
+        const apiUrl = resolveApiUrl();
+        // The outsider is NOT a member, so the ACL-filtered search must hide the hit.
+        const outsiderResponse = await request.get(
+          `${apiUrl}/api/search?q=${encodeURIComponent(aclPhrase)}`,
+          { headers: { Authorization: `Bearer ${outsider.token}` } },
+        );
+        expect(outsiderResponse.ok()).toBe(true);
+        const outsiderContents = extractMessageContents(await outsiderResponse.json());
+        expect(outsiderContents.some((content) => content.includes(aclPhrase))).toBe(false);
+      });
 
-      // The outsider is NOT a member, so the ACL-filtered search must hide the hit.
-      const outsiderResponse = await request.get(
-        `${apiUrl}/api/search?q=${encodeURIComponent(aclPhrase)}`,
-        { headers: { Authorization: `Bearer ${outsider.token}` } },
-      );
-      expect(outsiderResponse.ok()).toBe(true);
-      const outsiderContents = extractMessageContents(await outsiderResponse.json());
-      expect(outsiderContents.some((content) => content.includes(aclPhrase))).toBe(false);
-
-      // The owner IS a member, so the same query must surface the hit.
-      const ownerResponse = await request.get(
-        `${apiUrl}/api/search?q=${encodeURIComponent(aclPhrase)}`,
-        { headers: { Authorization: `Bearer ${owner.token}` } },
-      );
-      expect(ownerResponse.ok()).toBe(true);
-      const ownerContents = extractMessageContents(await ownerResponse.json());
-      expect(ownerContents.some((content) => content.includes(aclPhrase))).toBe(true);
+      await test.step('Assert the owner (a member) can see the hit', async () => {
+        const apiUrl = resolveApiUrl();
+        // The owner IS a member, so the same query must surface the hit.
+        const ownerResponse = await request.get(
+          `${apiUrl}/api/search?q=${encodeURIComponent(aclPhrase)}`,
+          { headers: { Authorization: `Bearer ${owner.token}` } },
+        );
+        expect(ownerResponse.ok()).toBe(true);
+        const ownerContents = extractMessageContents(await ownerResponse.json());
+        expect(ownerContents.some((content) => content.includes(aclPhrase))).toBe(true);
+      });
     });
   });
 
   test.describe('Result Navigation', () => {
     test('clicking a search result navigates to the originating channel', async ({ page }) => {
-      const user = await registerUserViaApi();
-      const channel = await createChannelViaApi(user.token, uniqueChannelName('nav'));
+      const { user, channel } =
+        await test.step('Provision a user and channel via the API', async () => {
+          const provisionedUser = await registerUserViaApi();
+          const provisionedChannel = await createChannelViaApi(
+            provisionedUser.token,
+            uniqueChannelName('nav'),
+          );
+          return { user: provisionedUser, channel: provisionedChannel };
+        });
 
-      await loginViaUi(page, user.email, user.password);
-      await page.goto(`/app/channels/${channel.id}`);
-      await expect(page.getByRole('textbox')).toBeVisible({ timeout: 10_000 });
+      await test.step('Sign in and open the channel', async () => {
+        await loginViaUi(page, user.email, user.password);
+        await page.goto(`/app/channels/${channel.id}`);
+        await expect(page.getByRole('textbox')).toBeVisible({ timeout: 10_000 });
+      });
 
-      const phrase = `navphrase${Date.now()}`;
-      await sendMessageViaUi(page, phrase);
-      await expect(page.getByText(phrase)).toBeVisible({ timeout: 5_000 });
+      const phrase = await test.step('Post a unique message then leave the channel', async () => {
+        const posted = `navphrase${Date.now()}`;
+        await sendMessageViaUi(page, posted);
+        await expect(page.getByText(posted)).toBeVisible({ timeout: 5_000 });
+        // Leave the channel so the post-click navigation is observable.
+        await page.goto('/app');
+        await expect(page).not.toHaveURL(new RegExp(`/app/channels/${channel.id}`));
+        return posted;
+      });
 
-      // Leave the channel so the post-click navigation is observable.
-      await page.goto('/app');
-      await expect(page).not.toHaveURL(new RegExp(`/app/channels/${channel.id}`));
-
-      await focusSearchBar(page);
-      await typeSearchQuery(page, phrase);
-
-      // Results may render as links, buttons, or plain text — match any of them.
-      const result = page
-        .getByRole('link', { name: new RegExp(phrase, 'i') })
-        .or(page.getByRole('button', { name: new RegExp(phrase, 'i') }))
-        .or(page.getByText(phrase))
-        .first();
-      await expect(result).toBeVisible({ timeout: 5_000 });
-      await result.click();
-
-      await expect(page).toHaveURL(new RegExp(`/app/channels/${channel.id}`), { timeout: 5_000 });
-      await expect(page.getByText(phrase).first()).toBeVisible({ timeout: 5_000 });
+      await test.step('Search and click the result to navigate back to the channel', async () => {
+        await focusSearchBar(page);
+        await typeSearchQuery(page, phrase);
+        // Results may render as links, buttons, or plain text - match any of them.
+        const result = page
+          .getByRole('link', { name: new RegExp(phrase, 'i') })
+          .or(page.getByRole('button', { name: new RegExp(phrase, 'i') }))
+          .or(page.getByText(phrase))
+          .first();
+        await expect(result).toBeVisible({ timeout: 5_000 });
+        await result.click();
+        await expect(page).toHaveURL(new RegExp(`/app/channels/${channel.id}`), {
+          timeout: 5_000,
+        });
+        await expect(page.getByText(phrase).first()).toBeVisible({ timeout: 5_000 });
+      });
     });
 
     test('results page uses shadcn Tabs to group categories', async ({ page }) => {
-      const user = await registerUserViaApi();
-      const channel = await createChannelViaApi(user.token, uniqueChannelName('tabs'));
+      const { user, channel } =
+        await test.step('Provision a user and channel via the API', async () => {
+          const provisionedUser = await registerUserViaApi();
+          const provisionedChannel = await createChannelViaApi(
+            provisionedUser.token,
+            uniqueChannelName('tabs'),
+          );
+          return { user: provisionedUser, channel: provisionedChannel };
+        });
 
-      await loginViaUi(page, user.email, user.password);
-      await page.goto(`/app/channels/${channel.id}`);
-      await expect(page.getByRole('textbox')).toBeVisible({ timeout: 10_000 });
+      await test.step('Sign in and open the channel', async () => {
+        await loginViaUi(page, user.email, user.password);
+        await page.goto(`/app/channels/${channel.id}`);
+        await expect(page.getByRole('textbox')).toBeVisible({ timeout: 10_000 });
+      });
 
-      const phrase = `tabphrase${Date.now()}`;
-      await sendMessageViaUi(page, phrase);
+      const phrase =
+        await test.step('Post a message and open the dedicated results surface', async () => {
+          const posted = `tabphrase${Date.now()}`;
+          await sendMessageViaUi(page, posted);
+          // Open the dedicated results surface with the query supplied in the URL.
+          await page.goto(`/app/search?q=${encodeURIComponent(posted)}`);
+          return posted;
+        });
 
-      // Open the dedicated results surface with the query supplied in the URL.
-      await page.goto(`/app/search?q=${encodeURIComponent(phrase)}`);
+      await test.step('Assert the results group into shadcn Tabs categories', async () => {
+        // shadcn Tabs exposes role="tablist" with each tab as role="tab".
+        const tablist = page.getByRole('tablist').first();
+        await expect(tablist).toBeVisible({ timeout: 5_000 });
 
-      // shadcn Tabs exposes role="tablist" with each tab as role="tab".
-      const tablist = page.getByRole('tablist').first();
-      await expect(tablist).toBeVisible({ timeout: 5_000 });
+        const tabs = page.getByRole('tab');
+        const tabCount = await tabs.count();
+        expect(tabCount).toBeGreaterThanOrEqual(3);
 
-      const tabs = page.getByRole('tab');
-      const tabCount = await tabs.count();
-      expect(tabCount).toBeGreaterThanOrEqual(3);
-
-      await page.getByRole('tab', { name: /messages/i }).click();
-      await expect(page.getByText(phrase).first()).toBeVisible({ timeout: 5_000 });
+        await page.getByRole('tab', { name: /messages/i }).click();
+        await expect(page.getByText(phrase).first()).toBeVisible({ timeout: 5_000 });
+      });
     });
   });
 
   test.describe('Edge Cases', () => {
     test('empty query does not fire a search request', async ({ page }) => {
-      const user = await registerUserViaApi();
-      const channel = await createChannelViaApi(user.token, uniqueChannelName('empty'));
+      const { user, channel } =
+        await test.step('Provision a user and channel via the API', async () => {
+          const provisionedUser = await registerUserViaApi();
+          const provisionedChannel = await createChannelViaApi(
+            provisionedUser.token,
+            uniqueChannelName('empty'),
+          );
+          return { user: provisionedUser, channel: provisionedChannel };
+        });
 
-      await loginViaUi(page, user.email, user.password);
-      await page.goto(`/app/channels/${channel.id}`);
-      await expect(page.getByRole('textbox')).toBeVisible({ timeout: 10_000 });
-
-      let searchCallMade = false;
-      page.on('request', (requestEvent) => {
-        if (requestEvent.url().includes('/api/search')) {
-          searchCallMade = true;
-        }
+      await test.step('Sign in and open the channel', async () => {
+        await loginViaUi(page, user.email, user.password);
+        await page.goto(`/app/channels/${channel.id}`);
+        await expect(page.getByRole('textbox')).toBeVisible({ timeout: 10_000 });
       });
 
-      await focusSearchBar(page);
-      // Submitting an empty input must not trigger a network search.
-      await page.keyboard.press('Enter');
-      await page.waitForTimeout(500);
+      await test.step('Submit an empty query and assert no search request fires', async () => {
+        let searchCallMade = false;
+        page.on('request', (requestEvent) => {
+          if (requestEvent.url().includes('/api/search')) {
+            searchCallMade = true;
+          }
+        });
 
-      expect(searchCallMade).toBe(false);
+        await focusSearchBar(page);
+        // Submitting an empty input must not trigger a network search.
+        await page.keyboard.press('Enter');
+        await page.waitForTimeout(500);
+
+        expect(searchCallMade).toBe(false);
+      });
     });
 
     test('rejects search query exceeding MAX_SEARCH_QUERY_LENGTH', async ({ request }) => {
-      const user = await registerUserViaApi();
-      const apiUrl = resolveApiUrl();
-
-      const tooLong = 'a'.repeat(MAX_SEARCH_QUERY_LENGTH + 1);
-      const response = await request.get(`${apiUrl}/api/search?q=${encodeURIComponent(tooLong)}`, {
-        headers: { Authorization: `Bearer ${user.token}` },
+      const user = await test.step('Provision a user via the API', async () => {
+        const provisionedUser = await registerUserViaApi();
+        return provisionedUser;
       });
-      expect(response.status()).toBe(400);
+
+      await test.step('Assert an over-long query is rejected with HTTP 400', async () => {
+        const apiUrl = resolveApiUrl();
+        const tooLong = 'a'.repeat(MAX_SEARCH_QUERY_LENGTH + 1);
+        const response = await request.get(
+          `${apiUrl}/api/search?q=${encodeURIComponent(tooLong)}`,
+          {
+            headers: { Authorization: `Bearer ${user.token}` },
+          },
+        );
+        expect(response.status()).toBe(400);
+      });
     });
 
     test('handles special characters in the search query without crashing', async ({ request }) => {
-      const user = await registerUserViaApi();
-      const apiUrl = resolveApiUrl();
+      const user = await test.step('Provision a user via the API', async () => {
+        const provisionedUser = await registerUserViaApi();
+        return provisionedUser;
+      });
 
-      // Characters that would break a naive to_tsquery. The service must escape
-      // them (plainto_tsquery / websearch_to_tsquery) and never return a 500.
-      const specialQueries = ['"quoted"', '(parens)', 'a|b', 'a&b', 'a:b', "a'b", 'back\\slash'];
-      for (const query of specialQueries) {
-        const response = await request.get(`${apiUrl}/api/search?q=${encodeURIComponent(query)}`, {
-          headers: { Authorization: `Bearer ${user.token}` },
-        });
-        expect([200, 400]).toContain(response.status());
-      }
+      await test.step('Assert special-character queries never return a 500', async () => {
+        const apiUrl = resolveApiUrl();
+        // Characters that would break a naive to_tsquery. The service must escape
+        // them (plainto_tsquery / websearch_to_tsquery) and never return a 500.
+        const specialQueries = ['"quoted"', '(parens)', 'a|b', 'a&b', 'a:b', "a'b", 'back\\slash'];
+        for (const query of specialQueries) {
+          const response = await request.get(
+            `${apiUrl}/api/search?q=${encodeURIComponent(query)}`,
+            { headers: { Authorization: `Bearer ${user.token}` } },
+          );
+          expect([200, 400]).toContain(response.status());
+        }
+      });
     });
   });
 });

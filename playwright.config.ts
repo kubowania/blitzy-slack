@@ -7,12 +7,11 @@ import { defineConfig, devices } from '@playwright/test';
  * server (`baseURL` = `VITE_APP_URL`). Before the suite starts, `globalSetup`
  * runs `scripts/seed-via-api.ts`, which creates the seed user `admin@test.com`
  * by calling `POST /api/auth/register` (Rule 4). The `expect.toHaveScreenshot`
- * tolerances below are the central source for the visual-fidelity suite
- * (`screenshot-fidelity.spec.ts`, Gate 8), so individual assertions omit them.
+ * tolerances below apply to the visual-fidelity suite
+ * (`screenshot-fidelity.spec.ts`, Gate 8); `snapshotPathTemplate` maps baselines
+ * to `<testFileDir>/__screenshots__`.
  *
- * Rationale and trade-offs for the choices in this file (WebKit opt-in,
- * reporter selection, screenshot tolerance, web-server autostart, CI execution
- * profile) are recorded in docs/decision-log.md (Explainability rule, §0.8.3).
+ * Decisions for this file are recorded in docs/decision-log.md (Explainability).
  */
 
 // Web app origin the browser navigates to; also the autostarted web server URL.
@@ -21,19 +20,22 @@ const baseURL = process.env.VITE_APP_URL ?? 'http://localhost:5173';
 // API readiness probe used when Playwright autostarts the API dev server.
 const apiHealthUrl = `${process.env.VITE_API_URL ?? 'http://localhost:3000'}/api/health`;
 
-// Chromium and Firefox always run; WebKit is included only when
-// PLAYWRIGHT_WEBKIT=1. See docs/decision-log.md for the rationale.
+// All three browser engines are defined so the suite covers chromium, firefox,
+// and webkit (Gate 8 / Gate 13). Host-specific launch constraints are documented
+// in docs/decision-log.md.
 const projects = [
   { name: 'chromium', use: { ...devices['Desktop Chrome'] } },
   { name: 'firefox', use: { ...devices['Desktop Firefox'] } },
+  { name: 'webkit', use: { ...devices['Desktop Safari'] } },
 ];
-
-if (process.env.PLAYWRIGHT_WEBKIT === '1') {
-  projects.push({ name: 'webkit', use: { ...devices['Desktop Safari'] } });
-}
 
 export default defineConfig({
   testDir: './packages/web/test/e2e',
+
+  // Visual-fidelity baselines resolve to `<testFileDir>/__screenshots__/<name>`
+  // (no project/platform suffix), matching the directory screenshot-fidelity.spec.ts
+  // seeds from the authoritative /screenshots assets (Rule 1 / Gate 8).
+  snapshotPathTemplate: '{testFileDir}/__screenshots__/{arg}{ext}',
 
   // Run spec files in parallel; `workers` below overrides concurrency on CI.
   fullyParallel: true,

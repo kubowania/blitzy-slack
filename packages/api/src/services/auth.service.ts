@@ -3,12 +3,12 @@
  * verification for the `@app/api` package.
  *
  * Public surface:
- *   register(input)        → { token, user }   (issues a JWT for a new account)
- *   login(input)           → { token, user }   (issues a JWT for valid credentials)
+ *   registerUser(input)    → { token, user }   (issues a JWT for a new account)
+ *   loginUser(input)       → { token, user }   (issues a JWT for valid credentials)
  *   verifyToken(token)     → AuthTokenPayload  (the single verifier shared by the
  *                                               HTTP Bearer middleware and the
  *                                               Socket.io handshake middleware)
- *   getCurrentUser(userId) → UserResponse      (resolves the authenticated self view)
+ *   getMe(userId)          → UserResponse      (resolves the authenticated self view)
  *
  * Layering: this module is a service — it is the only layer permitted to touch
  * the Prisma client directly. It never imports `express` or `socket.io`, never
@@ -29,11 +29,6 @@
  *    (the idempotency contract the seed flow depends on).
  *  - Login failures throw a single uniform error for both unknown-email and
  *    wrong-password cases.
- *
- * The rationale and trade-offs behind these choices (bcryptjs over native
- * bcrypt, HS256, unwrapped P2002, the uniform login error, returning the
- * `UserResponse` shape) are recorded in /docs/decision-log.md, not in code
- * comments (Explainability rule, AAP §0.8.3).
  */
 
 import bcrypt from 'bcryptjs';
@@ -163,7 +158,7 @@ export function verifyToken(token: string): AuthTokenPayload {
  * @param input - Registration payload already validated by the route's
  *                `validate(registerSchema)` middleware.
  */
-export async function register(input: RegisterInput): Promise<AuthResult> {
+export async function registerUser(input: RegisterInput): Promise<AuthResult> {
   const passwordHash = await bcrypt.hash(input.password, env.BCRYPT_ROUNDS);
 
   const created = await prisma.user.create({
@@ -175,7 +170,7 @@ export async function register(input: RegisterInput): Promise<AuthResult> {
   });
 
   const token = signToken(created);
-  logger.info({ userId: created.id, email: created.email }, 'auth.register.success');
+  logger.info({ userId: created.id }, 'auth.register.success');
   return { token, user: toUserDto(created) };
 }
 
@@ -190,7 +185,7 @@ export async function register(input: RegisterInput): Promise<AuthResult> {
  * @param input - Login payload already validated by the route's
  *                `validate(loginSchema)` middleware.
  */
-export async function login(input: LoginInput): Promise<AuthResult> {
+export async function loginUser(input: LoginInput): Promise<AuthResult> {
   const user = await prisma.user.findUnique({
     where: { email: input.email },
   });
@@ -198,7 +193,7 @@ export async function login(input: LoginInput): Promise<AuthResult> {
   const isValid = user !== null && (await bcrypt.compare(input.password, user.passwordHash));
 
   if (user === null || !isValid) {
-    logger.debug({ email: input.email }, 'auth.login.failed');
+    logger.debug('auth.login.failed');
     throw new UnauthorizedError('Invalid email or password');
   }
 
@@ -212,7 +207,7 @@ export async function login(input: LoginInput): Promise<AuthResult> {
  * `GET /api/auth/me`). Throws {@link NotFoundError} when the id no longer
  * resolves — e.g. a deleted account presenting an otherwise-valid token.
  */
-export async function getCurrentUser(userId: string): Promise<UserResponse> {
+export async function getMe(userId: string): Promise<UserResponse> {
   const user = await prisma.user.findUnique({
     where: { id: userId },
   });

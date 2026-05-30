@@ -1,12 +1,9 @@
 /**
- * ioredis client construction for the `@app/api` package (Pattern A).
+ * Redis connections and Socket.io Redis-adapter foundation for `@app/api`.
  *
- * Constructs the three Redis connections the API relies on and the graceful-
- * shutdown helper that closes them. Pattern A means this module exports the raw
- * ioredis clients only — the Socket.io Redis adapter is assembled at the call
- * site in `src/index.ts` via `io.adapter(createAdapter(pubClient, subClient))`.
- * This module never imports or instantiates `@socket.io/redis-adapter` itself,
- * keeping it free of any coupling to Socket.io.
+ * Constructs the three Redis connections the API relies on, exposes the
+ * Socket.io Redis-adapter factory (Rule 2 / AAP §0.4.5), and provides the
+ * graceful-shutdown helper that closes the connections.
  *
  * Three DISTINCT connections are opened, each constructed directly from
  * `env.REDIS_URL`:
@@ -22,27 +19,30 @@
  *                     connection so presence operations are never blocked behind
  *                     the subscriber connection.
  *
+ * Adapter foundation: `createRedisAdapter()` returns the adapter factory
+ * produced by `@socket.io/redis-adapter`'s `createAdapter(pubClient, subClient)`.
+ * The bootstrap in `src/index.ts` passes the result to `io.adapter(...)` so
+ * emissions on any API instance reach subscribers on any other instance.
+ *
  * Layering: this module sits directly above `./env.js` and `./logger.js` in the
- * API dependency tree and imports from no other `src/*` folder. It MUST NOT pull
- * in `express`, `socket.io`, `@socket.io/redis-adapter`, or `@prisma/client` —
- * those belong to `index.ts`/`app.ts`/the service layer.
+ * API dependency tree and imports from no other `src/*` folder. It imports
+ * `@socket.io/redis-adapter` for the adapter factory but MUST NOT pull in
+ * `express`, `socket.io`, or `@prisma/client` — those belong to
+ * `index.ts`/`app.ts`/the service layer.
  *
  * Load-time side effects: importing this module opens three TCP connections to
- * Redis immediately (`lazyConnect: false`). This is intentional — a Redis
- * misconfiguration surfaces at startup rather than at the first request. The
- * process entry point (`src/index.ts`) MUST call `disconnectRedisClients()` on
- * SIGTERM/SIGINT to close them cleanly.
+ * Redis immediately (`lazyConnect: false`) so a Redis misconfiguration surfaces
+ * at startup rather than at the first request. The process entry point
+ * (`src/index.ts`) MUST call `disconnectRedisClients()` on SIGTERM/SIGINT to
+ * close them cleanly.
  *
  * Security (AAP §0.8.4): `env.REDIS_URL` may embed credentials and therefore
  * MUST NOT be logged. Every log line that references the URL uses
  * `REDIS_URL_SAFE`, whose username and password have been stripped by
  * `safeUrl()`; error handlers log only `err.message`, never the whole error
  * object (which could carry connection details).
- *
- * Per the Explainability rule (AAP §0.8.3), the rationale for these choices
- * (Pattern A, three distinct connections, the connection-option values, and
- * credential stripping) lives in /docs/decision-log.md — not in code comments.
  */
+import { createAdapter } from '@socket.io/redis-adapter';
 import { Redis } from 'ioredis';
 import type { RedisOptions } from 'ioredis';
 
@@ -84,14 +84,24 @@ const REDIS_URL_SAFE = safeUrl(env.REDIS_URL);
  * - `enableReadyCheck: true` — defer commands until Redis reports `READY`.
  * - `maxRetriesPerRequest: 3` — fail a command after three retries instead of
  *   retrying indefinitely.
+ * - `retryStrategy` — exponential backoff between reconnection attempts: the
+ *   delay grows as `attempt * RETRY_BACKOFF_STEP_MS`, clamped to
+ *   `RETRY_BACKOFF_MAX_MS`, so a Redis outage produces bounded, increasing
+ *   retry intervals rather than a tight reconnection loop.
  * - `reconnectOnError` — reconnect only for the listed transient error tokens
  *   and let every other error propagate. The `err` parameter is contextually
  *   typed `Error` by `RedisOptions.reconnectOnError`.
  */
+const RETRY_BACKOFF_STEP_MS = 200;
+const RETRY_BACKOFF_MAX_MS = 5_000;
+
 const baseOptions: RedisOptions = {
   lazyConnect: false,
   enableReadyCheck: true,
   maxRetriesPerRequest: 3,
+  retryStrategy(times) {
+    return Math.min(times * RETRY_BACKOFF_STEP_MS, RETRY_BACKOFF_MAX_MS);
+  },
   reconnectOnError(err) {
     const targetErrors = ['READONLY', 'ECONNRESET', 'ETIMEDOUT'];
     return targetErrors.some((token) => err.message.includes(token));
@@ -136,9 +146,9 @@ function attachLifecycleLogging(client: Redis, label: string): void {
 /**
  * Publisher connection for the Socket.io Redis adapter.
  *
- * Passed as the first argument to `createAdapter(pubClient, subClient)` in
- * `src/index.ts`. Distinct from {@link subClient} because the adapter requires
- * independent publish and subscribe sockets.
+ * Passed as the first argument to `createAdapter(pubClient, subClient)` by
+ * {@link createRedisAdapter}. Distinct from {@link subClient} because the
+ * adapter requires independent publish and subscribe sockets.
  */
 export const pubClient: Redis = new Redis(env.REDIS_URL, baseOptions);
 attachLifecycleLogging(pubClient, 'pub');
@@ -146,9 +156,10 @@ attachLifecycleLogging(pubClient, 'pub');
 /**
  * Subscriber connection for the Socket.io Redis adapter.
  *
- * Passed as the second argument to `createAdapter(pubClient, subClient)`. A
- * Redis connection in subscriber mode cannot serve ordinary commands, so this
- * MUST be a separate connection from {@link pubClient} and {@link redisClient}.
+ * Passed as the second argument to `createAdapter(pubClient, subClient)` by
+ * {@link createRedisAdapter}. A Redis connection in subscriber mode cannot
+ * serve ordinary commands, so this MUST be a separate connection from
+ * {@link pubClient} and {@link redisClient}.
  */
 export const subClient: Redis = new Redis(env.REDIS_URL, baseOptions);
 attachLifecycleLogging(subClient, 'sub');
@@ -162,6 +173,23 @@ attachLifecycleLogging(subClient, 'sub');
  */
 export const redisClient: Redis = new Redis(env.REDIS_URL, baseOptions);
 attachLifecycleLogging(redisClient, 'presence');
+
+/**
+ * Build the Socket.io Redis adapter factory from the {@link pubClient} and
+ * {@link subClient} connections (Rule 2 / AAP §0.4.5).
+ *
+ * The returned value is the adapter factory `(nsp) => RedisAdapter` produced by
+ * `@socket.io/redis-adapter`'s `createAdapter`; the bootstrap in `src/index.ts`
+ * passes it to `io.adapter(...)` so emissions on any API instance reach
+ * subscribers connected to any other instance. Co-locating the adapter wiring
+ * with the pub/sub connections it depends on keeps the real-time foundation in
+ * a single module.
+ *
+ * @returns the Socket.io adapter factory bound to the pub/sub Redis connections.
+ */
+export function createRedisAdapter(): ReturnType<typeof createAdapter> {
+  return createAdapter(pubClient, subClient);
+}
 
 /**
  * Closes all three Redis connections cleanly. Intended for the SIGTERM/SIGINT

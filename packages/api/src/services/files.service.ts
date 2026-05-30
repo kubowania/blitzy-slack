@@ -2,7 +2,7 @@
  * File service — persist uploaded-file metadata and serve ACL-checked retrieval.
  *
  * Public surface:
- *   saveUploadedFile({ multerFile, uploadedById }) → FileAttachment
+ *   createFile({ multerFile, uploadedById })        → FileAttachment
  *   getFile({ fileId, userId })                     → { file: FileAttachment, diskPath: string }
  *
  * Layering and behavioral contract:
@@ -15,15 +15,9 @@
  *    referencing this file. It returns the absolute `diskPath`; the route handler
  *    streams the bytes via `res.sendFile(diskPath)`. This service NEVER touches
  *    the HTTP response or any Socket.io surface.
- *  - `saveUploadedFile` re-checks the byte size against `MAX_FILE_SIZE_MB` as a
+ *  - `createFile` re-checks the byte size against `MAX_FILE_SIZE_MB` as a
  *    defense-in-depth measure even though multer's `limits.fileSize` rejects
  *    oversize uploads first.
- *
- * The rationale for the design choices in this file — message-derived ACL (no
- * separate "shared with" table), unconditional uploader access, the
- * defense-in-depth size re-check, returning `diskPath` for the route to stream,
- * and the relative `/api/files/:id` URL — is recorded in /docs/decision-log.md,
- * not in code comments (Explainability rule, AAP §0.8.3).
  */
 
 import { resolve } from 'node:path';
@@ -54,7 +48,7 @@ export interface UploadedMulterFile {
 }
 
 /**
- * Input contract for {@link saveUploadedFile}. The route layer constructs this
+ * Input contract for {@link createFile}. The route layer constructs this
  * after multer has parsed the multipart body, populating `uploadedById` from the
  * authenticated principal.
  */
@@ -122,14 +116,14 @@ function toFileDto(record: PrismaFile): FileAttachment {
  *
  * @throws {ForbiddenError} when the byte size exceeds the configured cap.
  */
-export async function saveUploadedFile(input: SaveUploadedFileInput): Promise<FileAttachment> {
+export async function createFile(input: SaveUploadedFileInput): Promise<FileAttachment> {
   const { multerFile, uploadedById } = input;
 
   const maxBytes = env.MAX_FILE_SIZE_MB * 1024 * 1024;
   if (multerFile.size > maxBytes) {
     logger.warn(
       { uploadedById, size: multerFile.size, maxBytes },
-      'files.saveUploadedFile.oversize',
+      'files.createFile.oversize',
     );
     throw new ForbiddenError('File exceeds maximum allowed size');
   }
@@ -151,7 +145,7 @@ export async function saveUploadedFile(input: SaveUploadedFileInput): Promise<Fi
       sizeBytes: record.sizeBytes,
       mimeType: record.mimeType,
     },
-    'files.saveUploadedFile.success',
+    'files.createFile.success',
   );
 
   return toFileDto(record);

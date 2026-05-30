@@ -25,9 +25,9 @@ help: ## Show all available targets
 	@echo "blitzy-slack — available make targets:"
 	@grep -E '^[a-zA-Z0-9_-]+:.*## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*## "} {printf "  \033[36m%-12s\033[0m %s\n", $$1, $$2}'
 
-install: ## Install all workspace dependencies via pnpm
-	@echo "→ Installing workspace dependencies..."
-	@pnpm install
+install: ## Install all workspace dependencies via pnpm (frozen lockfile)
+	@echo "→ Installing workspace dependencies (frozen lockfile)..."
+	@pnpm install --frozen-lockfile
 
 up: ## Start PostgreSQL 16 + Redis 7 via Docker (waits for healthy)
 	@echo "→ Starting Docker services (Postgres 16 + Redis 7)..."
@@ -38,11 +38,15 @@ local: ## Full local bring-up: Docker -> install -> migrate -> seed -> dev serve
 	@$(MAKE) up
 	@$(MAKE) install
 	@$(MAKE) migrate
-	@echo "→ Starting API dev server in the background (logs: /tmp/blitzy-slack-api.log)..."
-	@pnpm --filter $(PKG_API) dev > /tmp/blitzy-slack-api.log 2>&1 & echo $$! > /tmp/blitzy-slack-api.pid
-	@echo "→ Waiting for $${VITE_API_URL:-http://localhost:3000}/api/health ..."
-	@for i in $$(seq 1 60); do \
-		if curl -sf "$${VITE_API_URL:-http://localhost:3000}/api/health" > /dev/null 2>&1; then \
+	@set -e; \
+	API_URL="$${VITE_API_URL:-http://localhost:3000}"; \
+	echo "→ Starting API dev server in the background (logs: /tmp/blitzy-slack-api.log)..."; \
+	pnpm --filter $(PKG_API) dev > /tmp/blitzy-slack-api.log 2>&1 & \
+	API_PID=$$!; \
+	trap 'echo "→ Stopping API (pid $$API_PID)..."; kill $$API_PID 2>/dev/null || true' EXIT INT TERM; \
+	echo "→ Waiting for $$API_URL/api/health ..."; \
+	for i in $$(seq 1 60); do \
+		if curl -sf "$$API_URL/api/health" > /dev/null 2>&1; then \
 			echo "→ API is healthy."; \
 			break; \
 		fi; \
@@ -51,10 +55,10 @@ local: ## Full local bring-up: Docker -> install -> migrate -> seed -> dev serve
 			exit 1; \
 		fi; \
 		sleep 1; \
-	done
-	@$(MAKE) seed
-	@echo "→ Starting web dev server (Ctrl+C to stop)..."
-	@pnpm --filter $(PKG_WEB) dev
+	done; \
+	$(MAKE) seed; \
+	echo "→ Starting web dev server (Ctrl+C stops the web and API together)..."; \
+	pnpm --filter $(PKG_WEB) dev
 
 dev: local ## Alias for `make local`
 
@@ -100,7 +104,9 @@ down: ## Stop the Docker Compose services
 	@echo "→ Stopping Docker services..."
 	@docker compose down
 
-clean: down ## Stop Docker, then remove node_modules, build artifacts, and uploads
+clean: ## Stop Docker (removing volumes), then remove node_modules, build artifacts, and uploads
+	@echo "→ Stopping Docker services and removing named volumes..."
+	@docker compose down -v
 	@echo "→ Removing dependencies and build artifacts..."
 	@find . -name 'node_modules' -type d -prune -exec rm -rf '{}' +
 	@find . -name 'dist' -type d -prune -exec rm -rf '{}' +

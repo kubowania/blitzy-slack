@@ -135,81 +135,113 @@ async function seedChannelMessageViaApi(
 test.describe('Channel Messaging', () => {
   test.describe('Channel Creation', () => {
     test('creates a public channel via the "+ Add channels" dialog', async ({ page }) => {
-      await loginAsAdmin(page);
       const channelName = uniqueChannelName('create');
 
-      // Open the sidebar's add-channel affordance. The label varies across the
-      // reference screenshots, so several Slack-equivalent names are matched.
-      await page
-        .getByRole('button', {
-          name: /add channels|create channel|new channel|create a channel|\+ channels/i,
-        })
-        .first()
-        .click();
+      await test.step('Sign in as the seeded admin', async () => {
+        await loginAsAdmin(page);
+      });
 
-      // The shadcn Dialog renders with role="dialog".
-      const dialog = page.getByRole('dialog');
-      await expect(dialog).toBeVisible({ timeout: 5_000 });
+      await test.step('Open the "+ Add channels" dialog and submit a new channel', async () => {
+        // Open the sidebar's add-channel affordance. The label varies across the
+        // reference screenshots, so several Slack-equivalent names are matched.
+        await page
+          .getByRole('button', {
+            name: /add channels|create channel|new channel|create a channel|\+ channels/i,
+          })
+          .first()
+          .click();
 
-      // The channel-name field is a shadcn Input wired through a Form/Label.
-      await dialog.getByLabel(/name|channel name/i).fill(channelName);
-      await dialog
-        .getByRole('button', { name: /create|submit|save/i })
-        .first()
-        .click();
+        // The shadcn Dialog renders with role="dialog".
+        const dialog = page.getByRole('dialog');
+        await expect(dialog).toBeVisible({ timeout: 5_000 });
 
-      // The dialog dismisses on success and the channel appears in the sidebar
-      // list. Per Rule 1 the name is rendered with a `#` prefix, so a substring
-      // match on the generated name is used rather than an exact-string match.
-      await expect(dialog).not.toBeVisible({ timeout: 5_000 });
-      await expect(page.getByRole('link', { name: new RegExp(channelName) }).first()).toBeVisible({
-        timeout: 5_000,
+        // The channel-name field is a shadcn Input wired through a Form/Label.
+        await dialog.getByLabel(/name|channel name/i).fill(channelName);
+        await dialog
+          .getByRole('button', { name: /create|submit|save/i })
+          .first()
+          .click();
+
+        // The dialog dismisses on success.
+        await expect(dialog).not.toBeVisible({ timeout: 5_000 });
+      });
+
+      await test.step('Assert the new channel appears in the sidebar list', async () => {
+        // Per Rule 1 the name is rendered with a `#` prefix, so a substring match
+        // on the generated name is used rather than an exact-string match.
+        await expect(page.getByRole('link', { name: new RegExp(channelName) }).first()).toBeVisible(
+          { timeout: 5_000 },
+        );
       });
     });
   });
 
   test.describe('Seeded Admin Access', () => {
     test('signs in with the registration-seeded admin credentials', async ({ page }) => {
-      // Per Rule 4, the seeded admin (ADMIN_EMAIL / ADMIN_PASSWORD constants) is
-      // created exclusively through POST /api/auth/register by `make seed`; it
-      // then authenticates through the standard login form like any other user.
-      // Reaching an authenticated /app route confirms the seed + login path.
-      await loginViaUi(page, ADMIN_EMAIL, ADMIN_PASSWORD);
-      await expect(page).toHaveURL(/\/app(\/.*)?$/);
+      await test.step('Authenticate through the login form as the seeded admin', async () => {
+        // Per Rule 4, the seeded admin (ADMIN_EMAIL / ADMIN_PASSWORD constants) is
+        // created exclusively through POST /api/auth/register by `make seed`; it
+        // then authenticates through the standard login form like any other user.
+        await loginViaUi(page, ADMIN_EMAIL, ADMIN_PASSWORD);
+      });
+
+      await test.step('Assert an authenticated /app route is reached', async () => {
+        // Reaching an authenticated /app route confirms the seed + login path.
+        await expect(page).toHaveURL(/\/app(\/.*)?$/);
+      });
     });
   });
 
   test.describe('Sending Messages', () => {
     test('sends a message and renders it in the timeline', async ({ page }) => {
-      // API-driven setup is faster and more deterministic than driving the
-      // creation dialog; the UI is exercised only for the behaviour under test.
-      const user = await registerUserViaApi();
-      const channelName = uniqueChannelName('msg');
-      const channel = await createChannelViaApi(user.token, channelName);
+      const { user, channel, channelName } =
+        await test.step('Provision a user and channel via the API', async () => {
+          // API-driven setup is faster and more deterministic than driving the
+          // creation dialog; the UI is exercised only for the behaviour under test.
+          const provisionedUser = await registerUserViaApi();
+          const name = uniqueChannelName('msg');
+          const provisionedChannel = await createChannelViaApi(provisionedUser.token, name);
+          return { user: provisionedUser, channel: provisionedChannel, channelName: name };
+        });
 
-      await loginViaUi(page, user.email, user.password);
-      await page.goto(`/app/channels/${channel.id}`);
+      await test.step('Sign in and open the channel', async () => {
+        await loginViaUi(page, user.email, user.password);
+        await page.goto(`/app/channels/${channel.id}`);
+        // The channel header confirms the view mounted before sending.
+        await expect(
+          page.getByRole('heading', { name: new RegExp(channelName) }).first(),
+        ).toBeVisible({ timeout: 10_000 });
+      });
 
-      // The channel header confirms the view mounted before sending.
-      await expect(
-        page.getByRole('heading', { name: new RegExp(channelName) }).first(),
-      ).toBeVisible({ timeout: 10_000 });
-
-      const content = `hello-world-${Date.now()}`;
-      await sendMessageViaUi(page, content);
-      await expect(page.getByText(content).first()).toBeVisible({ timeout: 5_000 });
+      await test.step('Send a message and assert it renders in the timeline', async () => {
+        const content = `hello-world-${Date.now()}`;
+        await sendMessageViaUi(page, content);
+        await expect(page.getByText(content).first()).toBeVisible({ timeout: 5_000 });
+      });
     });
   });
 
   test.describe('Real-Time Delivery (Cross-Browser)', () => {
     test('delivers a message to a second client within 500ms (Gate 9)', async ({ browser }) => {
-      const user1 = await registerUserViaApi();
-      const user2 = await registerUserViaApi();
-      const channelName = uniqueChannelName('realtime');
-      const channel = await createChannelViaApi(user1.token, channelName, false);
-      // The second user joins the public channel so both share the
-      // `channel:<id>` Socket.io room (AAP §0.4.5).
-      await joinChannelViaApi(user2.token, channel.id);
+      const { user1, user2, channel } =
+        await test.step('Provision two users and a shared public channel', async () => {
+          const provisionedUser1 = await registerUserViaApi();
+          const provisionedUser2 = await registerUserViaApi();
+          const channelName = uniqueChannelName('realtime');
+          const provisionedChannel = await createChannelViaApi(
+            provisionedUser1.token,
+            channelName,
+            false,
+          );
+          // The second user joins the public channel so both share the
+          // `channel:<id>` Socket.io room (AAP §0.4.5).
+          await joinChannelViaApi(provisionedUser2.token, provisionedChannel.id);
+          return {
+            user1: provisionedUser1,
+            user2: provisionedUser2,
+            channel: provisionedChannel,
+          };
+        });
 
       // Two isolated browser contexts model two users on two machines — the only
       // faithful way to exercise the Rule 2 Socket.io + Redis-adapter path.
@@ -219,35 +251,41 @@ test.describe('Channel Messaging', () => {
         const page1 = await context1.newPage();
         const page2 = await context2.newPage();
 
-        await loginViaUi(page1, user1.email, user1.password);
-        await loginViaUi(page2, user2.email, user2.password);
+        const composer1 =
+          await test.step('Sign both clients in and open the channel on each', async () => {
+            await loginViaUi(page1, user1.email, user1.password);
+            await loginViaUi(page2, user2.email, user2.password);
 
-        await page1.goto(`/app/channels/${channel.id}`);
-        await page2.goto(`/app/channels/${channel.id}`);
+            await page1.goto(`/app/channels/${channel.id}`);
+            await page2.goto(`/app/channels/${channel.id}`);
 
-        // A visible composer on each page signals that the channel view (and its
-        // socket subscription) has mounted on both clients.
-        const composer1 = page1.getByRole('textbox', { name: COMPOSER_NAME }).first();
-        await expect(composer1).toBeVisible({ timeout: 10_000 });
-        await expect(page2.getByRole('textbox', { name: COMPOSER_NAME }).first()).toBeVisible({
-          timeout: 10_000,
+            // A visible composer on each page signals that the channel view (and
+            // its socket subscription) has mounted on both clients.
+            const composer = page1.getByRole('textbox', { name: COMPOSER_NAME }).first();
+            await expect(composer).toBeVisible({ timeout: 10_000 });
+            await expect(page2.getByRole('textbox', { name: COMPOSER_NAME }).first()).toBeVisible({
+              timeout: 10_000,
+            });
+            return composer;
+          });
+
+        await test.step('Send from client 1 and assert delivery to client 2 under the 500 ms budget', async () => {
+          // Fill BEFORE timing so the measured window is purely send -> receive.
+          const content = `realtime-${Date.now()}`;
+          await composer1.fill(content);
+          const sendTime = Date.now();
+          await composer1.press('Enter');
+
+          // The message must reach the SECOND client over Socket.io, not a reload.
+          await expect(page2.getByText(content).first()).toBeVisible({ timeout: 2_000 });
+          const deltaMs = Date.now() - sendTime;
+
+          // Gate 9 budget is < 500 ms. The measured delta also includes
+          // Playwright's web-first assertion polling, so the true socket latency
+          // is lower than this number. If CI hardware makes this flaky, the
+          // budget may be relaxed to 1000 ms with a /docs/decision-log.md entry.
+          expect(deltaMs).toBeLessThan(500);
         });
-
-        // Fill BEFORE timing so the measured window is purely send -> receive.
-        const content = `realtime-${Date.now()}`;
-        await composer1.fill(content);
-        const sendTime = Date.now();
-        await composer1.press('Enter');
-
-        // The message must reach the SECOND client over Socket.io, not a reload.
-        await expect(page2.getByText(content).first()).toBeVisible({ timeout: 2_000 });
-        const deltaMs = Date.now() - sendTime;
-
-        // Gate 9 budget is < 500 ms. The measured delta also includes
-        // Playwright's web-first assertion polling, so the true socket latency is
-        // lower than this number. If CI hardware makes this flaky, the budget may
-        // be relaxed to 1000 ms with a /docs/decision-log.md entry.
-        expect(deltaMs).toBeLessThan(500);
       } finally {
         // Always release both contexts, even if an assertion above fails.
         await context1.close();
@@ -256,11 +294,23 @@ test.describe('Channel Messaging', () => {
     });
 
     test('delivers an emoji reaction to a second client in real time', async ({ browser }) => {
-      const user1 = await registerUserViaApi();
-      const user2 = await registerUserViaApi();
-      const channelName = uniqueChannelName('react');
-      const channel = await createChannelViaApi(user1.token, channelName, false);
-      await joinChannelViaApi(user2.token, channel.id);
+      const { user1, user2, channel } =
+        await test.step('Provision two users and a shared public channel', async () => {
+          const provisionedUser1 = await registerUserViaApi();
+          const provisionedUser2 = await registerUserViaApi();
+          const channelName = uniqueChannelName('react');
+          const provisionedChannel = await createChannelViaApi(
+            provisionedUser1.token,
+            channelName,
+            false,
+          );
+          await joinChannelViaApi(provisionedUser2.token, provisionedChannel.id);
+          return {
+            user1: provisionedUser1,
+            user2: provisionedUser2,
+            channel: provisionedChannel,
+          };
+        });
 
       const context1 = await browser.newContext();
       const context2 = await browser.newContext();
@@ -268,33 +318,40 @@ test.describe('Channel Messaging', () => {
         const page1 = await context1.newPage();
         const page2 = await context2.newPage();
 
-        await loginViaUi(page1, user1.email, user1.password);
-        await loginViaUi(page2, user2.email, user2.password);
+        await test.step('Sign both clients in and open the channel on each', async () => {
+          await loginViaUi(page1, user1.email, user1.password);
+          await loginViaUi(page2, user2.email, user2.password);
 
-        await page1.goto(`/app/channels/${channel.id}`);
-        await page2.goto(`/app/channels/${channel.id}`);
+          await page1.goto(`/app/channels/${channel.id}`);
+          await page2.goto(`/app/channels/${channel.id}`);
+        });
 
-        const content = `reaction-target-${Date.now()}`;
-        await sendMessageViaUi(page1, content);
-        await expect(page1.getByText(content).first()).toBeVisible({ timeout: 5_000 });
-        await expect(page2.getByText(content).first()).toBeVisible({ timeout: 5_000 });
+        const content = await test.step('Post a message visible to both clients', async () => {
+          const posted = `reaction-target-${Date.now()}`;
+          await sendMessageViaUi(page1, posted);
+          await expect(page1.getByText(posted).first()).toBeVisible({ timeout: 5_000 });
+          await expect(page2.getByText(posted).first()).toBeVisible({ timeout: 5_000 });
+          return posted;
+        });
 
-        // Hovering the message text reveals the row toolbar (the :hover state
-        // applies to the ancestor row), exposing the add-reaction control.
-        await page1.getByText(content).first().hover();
-        await page1
-          .getByRole('button', { name: /add reaction|react|emoji/i })
-          .first()
-          .click();
+        await test.step('React on client 1 and assert the reaction propagates to client 2', async () => {
+          // Hovering the message text reveals the row toolbar (the :hover state
+          // applies to the ancestor row), exposing the add-reaction control.
+          await page1.getByText(content).first().hover();
+          await page1
+            .getByRole('button', { name: /add reaction|react|emoji/i })
+            .first()
+            .click();
 
-        // The emoji grid is a project-local component inside a shadcn Popover
-        // (AAP §0.5.4); the wave emoji is selectable by its glyph label.
-        await page1.getByRole('button', { name: '👋' }).first().click();
+          // The emoji grid is a project-local component inside a shadcn Popover
+          // (AAP §0.5.4); the wave emoji is selectable by its glyph label.
+          await page1.getByRole('button', { name: '👋' }).first().click();
 
-        // The reaction pill shows for the actor and propagates to the peer via
-        // the `reaction:added` event (Rule 2) without any reload.
-        await expect(page1.getByText('👋').first()).toBeVisible({ timeout: 2_000 });
-        await expect(page2.getByText('👋').first()).toBeVisible({ timeout: 2_000 });
+          // The reaction pill shows for the actor and propagates to the peer via
+          // the `reaction:added` event (Rule 2) without any reload.
+          await expect(page1.getByText('👋').first()).toBeVisible({ timeout: 2_000 });
+          await expect(page2.getByText('👋').first()).toBeVisible({ timeout: 2_000 });
+        });
       } finally {
         await context1.close();
         await context2.close();
@@ -304,36 +361,53 @@ test.describe('Channel Messaging', () => {
 
   test.describe('Threads', () => {
     test('opens the thread Sheet and posts a reply', async ({ page }) => {
-      const user = await registerUserViaApi();
-      const channel = await createChannelViaApi(user.token, uniqueChannelName('thread'));
+      const { user, channel } =
+        await test.step('Provision a user and channel via the API', async () => {
+          const provisionedUser = await registerUserViaApi();
+          const provisionedChannel = await createChannelViaApi(
+            provisionedUser.token,
+            uniqueChannelName('thread'),
+          );
+          return { user: provisionedUser, channel: provisionedChannel };
+        });
 
-      await loginViaUi(page, user.email, user.password);
-      await page.goto(`/app/channels/${channel.id}`);
+      await test.step('Sign in and open the channel', async () => {
+        await loginViaUi(page, user.email, user.password);
+        await page.goto(`/app/channels/${channel.id}`);
+      });
 
-      const parentContent = `thread-parent-${Date.now()}`;
-      await sendMessageViaUi(page, parentContent);
-      await expect(page.getByText(parentContent).first()).toBeVisible({ timeout: 5_000 });
+      const parentContent = await test.step('Post a parent message', async () => {
+        const parent = `thread-parent-${Date.now()}`;
+        await sendMessageViaUi(page, parent);
+        await expect(page.getByText(parent).first()).toBeVisible({ timeout: 5_000 });
+        return parent;
+      });
 
-      // Reveal the toolbar on the parent message and open its thread.
-      await page.getByText(parentContent).first().hover();
-      await page
-        .getByRole('button', { name: /reply in thread|start a thread|thread/i })
-        .first()
-        .click();
+      const thread = await test.step('Open the thread Sheet on the parent message', async () => {
+        // Reveal the toolbar on the parent message and open its thread.
+        await page.getByText(parentContent).first().hover();
+        await page
+          .getByRole('button', { name: /reply in thread|start a thread|thread/i })
+          .first()
+          .click();
 
-      // The thread panel is a shadcn Sheet (role="dialog"); it is the most
-      // recently opened dialog, so `.last()` selects it deterministically.
-      const thread = page.getByRole('dialog').last();
-      await expect(thread).toBeVisible({ timeout: 5_000 });
+        // The thread panel is a shadcn Sheet (role="dialog"); it is the most
+        // recently opened dialog, so `.last()` selects it deterministically.
+        const panel = page.getByRole('dialog').last();
+        await expect(panel).toBeVisible({ timeout: 5_000 });
+        return panel;
+      });
 
-      // The Sheet hosts its own composer; the reply posts into the
-      // `thread:<parentId>` room and renders within the panel.
-      const replyContent = `thread-reply-${Date.now()}`;
-      const threadComposer = thread.getByRole('textbox').first();
-      await threadComposer.fill(replyContent);
-      await threadComposer.press('Enter');
+      await test.step('Post a reply in the Sheet and assert it renders in the panel', async () => {
+        // The Sheet hosts its own composer; the reply posts into the
+        // `thread:<parentId>` room and renders within the panel.
+        const replyContent = `thread-reply-${Date.now()}`;
+        const threadComposer = thread.getByRole('textbox').first();
+        await threadComposer.fill(replyContent);
+        await threadComposer.press('Enter');
 
-      await expect(thread.getByText(replyContent).first()).toBeVisible({ timeout: 5_000 });
+        await expect(thread.getByText(replyContent).first()).toBeVisible({ timeout: 5_000 });
+      });
     });
   });
 
@@ -343,102 +417,156 @@ test.describe('Channel Messaging', () => {
       // the slowest scenario in the suite; allow extra wall-clock time.
       test.setTimeout(60_000);
 
-      const user = await registerUserViaApi();
-      const channel = await createChannelViaApi(user.token, uniqueChannelName('scroll'));
+      const { user, channel, total } =
+        await test.step('Provision a channel and seed PAGE_SIZE + 5 messages via the API', async () => {
+          const provisionedUser = await registerUserViaApi();
+          const provisionedChannel = await createChannelViaApi(
+            provisionedUser.token,
+            uniqueChannelName('scroll'),
+          );
+          // Seed PAGE_SIZE + 5 messages through the API (Rule 4 — never a direct
+          // DB insert) so a second cursor page exists behind the newest PAGE_SIZE.
+          const seedTotal = PAGE_SIZE + 5;
+          for (let i = 0; i < seedTotal; i++) {
+            await seedChannelMessageViaApi(
+              provisionedUser.token,
+              provisionedChannel.id,
+              `seed-${i}`,
+            );
+          }
+          return { user: provisionedUser, channel: provisionedChannel, total: seedTotal };
+        });
 
-      // Seed PAGE_SIZE + 5 messages through the API (Rule 4 — never a direct DB
-      // insert) so a second cursor page exists behind the newest PAGE_SIZE.
-      const total = PAGE_SIZE + 5;
-      for (let i = 0; i < total; i++) {
-        await seedChannelMessageViaApi(user.token, channel.id, `seed-${i}`);
-      }
-
-      await loginViaUi(page, user.email, user.password);
-      await page.goto(`/app/channels/${channel.id}`);
-
-      // The newest page renders first; the most recent seeded message is shown.
-      await expect(page.getByText(`seed-${total - 1}`).first()).toBeVisible({ timeout: 10_000 });
-
-      // Scroll the timeline region to the top to trip the IntersectionObserver
-      // sentinel that requests the previous (older) cursor page.
-      const messageList = page.getByRole('log').or(page.getByTestId('message-list')).first();
-      await messageList.evaluate((el) => {
-        el.scrollTo({ top: 0 });
+      await test.step('Sign in and assert the newest page renders first', async () => {
+        await loginViaUi(page, user.email, user.password);
+        await page.goto(`/app/channels/${channel.id}`);
+        // The newest page renders first; the most recent seeded message is shown.
+        await expect(page.getByText(`seed-${total - 1}`).first()).toBeVisible({
+          timeout: 10_000,
+        });
       });
 
-      // The oldest seeded message (absent from the first page) becomes visible
-      // once the older page is prepended.
-      await expect(page.getByText('seed-0').first()).toBeVisible({ timeout: 10_000 });
+      await test.step('Scroll to the top and assert the older cursor page loads', async () => {
+        // Scroll the timeline region to the top to trip the IntersectionObserver
+        // sentinel that requests the previous (older) cursor page.
+        const messageList = page.getByRole('log').or(page.getByTestId('message-list')).first();
+        await messageList.evaluate((el) => {
+          el.scrollTo({ top: 0 });
+        });
+
+        // The oldest seeded message (absent from the first page) becomes visible
+        // once the older page is prepended.
+        await expect(page.getByText('seed-0').first()).toBeVisible({ timeout: 10_000 });
+      });
     });
   });
 
   test.describe('Edge Cases', () => {
     test('does not send an empty message', async ({ page }) => {
-      const user = await registerUserViaApi();
-      const channel = await createChannelViaApi(user.token, uniqueChannelName('empty'));
+      const { user, channel } =
+        await test.step('Provision a user and channel via the API', async () => {
+          const provisionedUser = await registerUserViaApi();
+          const provisionedChannel = await createChannelViaApi(
+            provisionedUser.token,
+            uniqueChannelName('empty'),
+          );
+          return { user: provisionedUser, channel: provisionedChannel };
+        });
 
-      await loginViaUi(page, user.email, user.password);
-      await page.goto(`/app/channels/${channel.id}`);
+      const composer =
+        await test.step('Sign in, open the channel, and locate the composer', async () => {
+          await loginViaUi(page, user.email, user.password);
+          await page.goto(`/app/channels/${channel.id}`);
+          const composerLocator = page.getByRole('textbox', { name: COMPOSER_NAME }).first();
+          await expect(composerLocator).toBeVisible({ timeout: 10_000 });
+          return composerLocator;
+        });
 
-      const composer = page.getByRole('textbox', { name: COMPOSER_NAME }).first();
-      await expect(composer).toBeVisible({ timeout: 10_000 });
-
-      // Pressing Enter on an empty composer must be a no-op: nothing is posted
-      // and the composer remains empty (a textarea-backed shadcn composer).
-      await composer.focus();
-      await composer.press('Enter');
-      await expect(composer).toHaveValue('');
+      await test.step('Press Enter on the empty composer and assert nothing is posted', async () => {
+        // Pressing Enter on an empty composer must be a no-op: nothing is posted
+        // and the composer remains empty (a textarea-backed shadcn composer).
+        await composer.focus();
+        await composer.press('Enter');
+        await expect(composer).toHaveValue('');
+      });
     });
 
     test('rejects a message longer than MAX_MESSAGE_LENGTH', async ({ page }) => {
-      const user = await registerUserViaApi();
-      const channel = await createChannelViaApi(user.token, uniqueChannelName('long'));
+      const { user, channel } =
+        await test.step('Provision a user and channel via the API', async () => {
+          const provisionedUser = await registerUserViaApi();
+          const provisionedChannel = await createChannelViaApi(
+            provisionedUser.token,
+            uniqueChannelName('long'),
+          );
+          return { user: provisionedUser, channel: provisionedChannel };
+        });
 
-      await loginViaUi(page, user.email, user.password);
-      await page.goto(`/app/channels/${channel.id}`);
+      const composer =
+        await test.step('Sign in, open the channel, and locate the composer', async () => {
+          await loginViaUi(page, user.email, user.password);
+          await page.goto(`/app/channels/${channel.id}`);
+          const composerLocator = page.getByRole('textbox', { name: COMPOSER_NAME }).first();
+          await expect(composerLocator).toBeVisible({ timeout: 10_000 });
+          return composerLocator;
+        });
 
-      const composer = page.getByRole('textbox', { name: COMPOSER_NAME }).first();
-      await expect(composer).toBeVisible({ timeout: 10_000 });
+      await test.step('Submit an over-length body and assert it is never posted', async () => {
+        const tooLong = 'a'.repeat(MAX_MESSAGE_LENGTH + 1);
+        await composer.fill(tooLong);
+        await composer.press('Enter');
 
-      const tooLong = 'a'.repeat(MAX_MESSAGE_LENGTH + 1);
-      await composer.fill(tooLong);
-      await composer.press('Enter');
-
-      // Whether the client blocks submit, truncates the input, or the API
-      // returns 400, the exact over-length body must never appear as a posted
-      // message. A brief settle absorbs any async post attempt before this
-      // negative assertion (the documented exception for "did not happen").
-      await page.waitForTimeout(1_000);
-      await expect(page.getByText(tooLong)).toHaveCount(0);
+        // Whether the client blocks submit, truncates the input, or the API
+        // returns 400, the exact over-length body must never appear as a posted
+        // message. A brief settle absorbs any async post attempt before this
+        // negative assertion (the documented exception for "did not happen").
+        await page.waitForTimeout(1_000);
+        await expect(page.getByText(tooLong)).toHaveCount(0);
+      });
     });
 
     test('reconnects Socket.io after a network drop', async ({ page, context }) => {
-      const user = await registerUserViaApi();
-      const channel = await createChannelViaApi(user.token, uniqueChannelName('reconnect'));
+      const { user, channel } =
+        await test.step('Provision a user and channel via the API', async () => {
+          const provisionedUser = await registerUserViaApi();
+          const provisionedChannel = await createChannelViaApi(
+            provisionedUser.token,
+            uniqueChannelName('reconnect'),
+          );
+          return { user: provisionedUser, channel: provisionedChannel };
+        });
 
-      await loginViaUi(page, user.email, user.password);
-      await page.goto(`/app/channels/${channel.id}`);
+      await test.step('Sign in and open the channel', async () => {
+        await loginViaUi(page, user.email, user.password);
+        await page.goto(`/app/channels/${channel.id}`);
+      });
 
-      // Baseline: a message sends and renders while connected.
-      const before = `before-disconnect-${Date.now()}`;
-      await sendMessageViaUi(page, before);
-      await expect(page.getByText(before).first()).toBeVisible({ timeout: 5_000 });
+      await test.step('Confirm baseline send works while connected', async () => {
+        // Baseline: a message sends and renders while connected.
+        const before = `before-disconnect-${Date.now()}`;
+        await sendMessageViaUi(page, before);
+        await expect(page.getByText(before).first()).toBeVisible({ timeout: 5_000 });
+      });
 
-      // Drop the network so the client observes a disconnect, then restore it.
-      // The short offline wait covers a network-state change that has no UI
-      // signal; reconnection itself is verified by the behaviour below.
-      await context.setOffline(true);
-      await page.waitForTimeout(2_000);
-      await context.setOffline(false);
+      await test.step('Drop and restore the network connection', async () => {
+        // Drop the network so the client observes a disconnect, then restore it.
+        // The short offline wait covers a network-state change that has no UI
+        // signal; reconnection itself is verified by the behaviour below.
+        await context.setOffline(true);
+        await page.waitForTimeout(2_000);
+        await context.setOffline(false);
+      });
 
-      // After the socket re-establishes, a freshly sent message must still flow
-      // over Socket.io. `toPass` retries the send until reconnection completes,
-      // replacing a brittle fixed wait with behaviour-driven polling.
-      const after = `after-reconnect-${Date.now()}`;
-      await expect(async () => {
-        await sendMessageViaUi(page, after);
-        await expect(page.getByText(after).first()).toBeVisible({ timeout: 4_000 });
-      }).toPass({ timeout: 20_000 });
+      await test.step('Assert messaging resumes after Socket.io reconnects', async () => {
+        // After the socket re-establishes, a freshly sent message must still flow
+        // over Socket.io. `toPass` retries the send until reconnection completes,
+        // replacing a brittle fixed wait with behaviour-driven polling.
+        const after = `after-reconnect-${Date.now()}`;
+        await expect(async () => {
+          await sendMessageViaUi(page, after);
+          await expect(page.getByText(after).first()).toBeVisible({ timeout: 4_000 });
+        }).toPass({ timeout: 20_000 });
+      });
     });
   });
 });

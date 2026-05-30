@@ -6,7 +6,7 @@
  *   createChannel({ name, description?, isPrivate, createdById }) → Channel
  *   joinChannel({ channelId, userId })                            → Channel
  *   leaveChannel({ channelId, userId })                           → void
- *   listMessages({ channelId, userId, cursor?, limit? })          → { messages, nextCursor }
+ *   listChannelMessages({ channelId, userId, cursor?, limit? })  → { messages, nextCursor }
  *
  * Layering and behavioral contract:
  *  - This service is the only layer permitted to touch Prisma for channel data.
@@ -20,18 +20,14 @@
  *    single transaction so the creator is always an `owner` of the channel they
  *    create.
  *  - `joinChannel` adds the caller as a `member` of a PUBLIC channel; private
- *    channels are not self-joinable (the PoC has no invite flow).
+ *    channels are not self-joinable (the PoC has no invite flow). Re-joining a
+ *    channel the caller already belongs to is idempotent and returns the
+ *    existing channel.
  *  - `leaveChannel` removes the caller's membership and is idempotent from the
  *    client's perspective — leaving a channel the caller is not in is a 404.
- *  - `listMessages` enforces channel access control, then paginates the channel
- *    timeline with an opaque (createdAt, id) cursor, returning only top-level
- *    messages (thread replies are read through the messages service).
- *
- * The rationale for the design choices in this file — the creator-as-owner
- * transaction, the private-channel join block, the opaque base64url cursor, the
- * +1 peek pagination, the top-level-only timeline filter, and the P2025→404
- * idempotent leave — is recorded in /docs/decision-log.md, not in code comments
- * (Explainability rule, AAP §0.8.3).
+ *  - `listChannelMessages` enforces channel access control, then paginates the
+ *    channel timeline with an opaque (createdAt, id) cursor, returning only
+ *    top-level messages (thread replies are read through the messages service).
  */
 
 import { prisma, Prisma } from '@app/db';
@@ -78,7 +74,7 @@ export interface JoinLeaveInput {
 }
 
 /**
- * Input contract for {@link listMessages}. `cursor` is the opaque token returned
+ * Input contract for {@link listChannelMessages}. `cursor` is the opaque token returned
  * as `nextCursor` by a previous page; `limit` defaults to {@link PAGE_SIZE} and
  * is capped server-side at {@link MAX_PAGE_SIZE}.
  */
@@ -94,7 +90,7 @@ export interface ListMessagesInput {
 }
 
 /**
- * Result of {@link listMessages}: the page of messages (newest-first) and the
+ * Result of {@link listChannelMessages}: the page of messages (newest-first) and the
  * cursor to fetch the next, older page.
  */
 export interface ListMessagesResult {
@@ -295,7 +291,9 @@ function toMessageDto(
  * channels the user is a member of. Private channels the user does not belong
  * to are omitted entirely, so the listing itself is the first ACL boundary.
  *
- * Results are ordered by `name` ascending (the Slack sidebar convention).
+ * Results are ordered by `name` ascending (the Slack sidebar convention) and
+ * capped at `MAX_PAGE_SIZE` rows so the method can never return an unbounded
+ * list at PoC scale.
  *
  * @param userId - the requesting user's id.
  * @returns the visible channels as `ChannelSummary` DTOs, name-ascending.
@@ -306,6 +304,7 @@ export async function listChannels(userId: string): Promise<ChannelSummary[]> {
       OR: [{ isPrivate: false }, { isPrivate: true, members: { some: { userId } } }],
     },
     orderBy: { name: 'asc' },
+    take: MAX_PAGE_SIZE,
   });
 
   logger.debug({ userId, count: records.length }, 'channels.list.success');
@@ -361,9 +360,10 @@ export async function createChannel(input: CreateChannelInputWithCreator): Promi
  * Add the caller as a `member` of a PUBLIC channel.
  *
  * Private channels are not self-joinable in the PoC (there is no invite flow);
- * an attempt raises `ForbiddenError`. A duplicate membership (the caller is
- * already a member) raises Prisma's `P2002` on the `(channelId, userId)` unique
- * constraint, which propagates to the error handler and maps to HTTP 409.
+ * an attempt raises `ForbiddenError`. The join is idempotent: a duplicate
+ * membership (the caller is already a member) raises Prisma's `P2002` on the
+ * `(channelId, userId)` unique constraint, which is caught here and resolved to
+ * the already-joined channel DTO instead of surfacing as a 409.
  *
  * @param input - the target channel id and the authenticated caller id.
  * @returns the joined channel as a `Channel` DTO.
@@ -383,15 +383,22 @@ export async function joinChannel(input: JoinLeaveInput): Promise<Channel> {
     throw new ForbiddenError('Private channels cannot be joined directly');
   }
 
-  await prisma.channelMember.create({
-    data: {
-      channelId,
-      userId,
-      role: 'member',
-    },
-  });
-
-  logger.info({ channelId, userId }, 'channels.join.success');
+  try {
+    await prisma.channelMember.create({
+      data: {
+        channelId,
+        userId,
+        role: 'member',
+      },
+    });
+    logger.info({ channelId, userId }, 'channels.join.success');
+  } catch (err) {
+    if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002') {
+      logger.debug({ channelId, userId }, 'channels.join.idempotent');
+      return toChannelDto(channel);
+    }
+    throw err;
+  }
 
   return toChannelDto(channel);
 }
@@ -447,7 +454,9 @@ export async function leaveChannel(input: JoinLeaveInput): Promise<void> {
  * @throws {ForbiddenError} when the channel is private and the caller is not a member.
  * @throws {ValidationError} when a supplied cursor is malformed.
  */
-export async function listMessages(input: ListMessagesInput): Promise<ListMessagesResult> {
+export async function listChannelMessages(
+  input: ListMessagesInput,
+): Promise<ListMessagesResult> {
   const { channelId, userId, cursor } = input;
   const limit = resolveLimit(input.limit);
 
@@ -515,7 +524,7 @@ export async function listMessages(input: ListMessagesInput): Promise<ListMessag
 
   logger.debug(
     { channelId, userId, count: messages.length, hasMore },
-    'channels.listMessages.success',
+    'channels.listChannelMessages.success',
   );
 
   return { messages, nextCursor };

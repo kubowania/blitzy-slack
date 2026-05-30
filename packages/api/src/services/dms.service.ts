@@ -3,7 +3,7 @@
  *
  * Public surface:
  *   listDms(userId)                                 → DMWithParticipants[]
- *   createOrFindDm({ initiatorId, otherUserId })    → DMWithParticipants
+ *   startDm({ initiatorId, otherUserId })           → DMWithParticipants
  *   listDmMessages({ dmId, userId, cursor?, limit?})→ { messages, nextCursor }
  *
  * Layering and behavioral contract:
@@ -14,19 +14,13 @@
  *    both participants and the timestamp of the most-recent message so the
  *    sidebar can order conversations and render the "other person" without an
  *    extra fetch.
- *  - `createOrFindDm` is idempotent: a DM is uniquely identified by the
- *    canonical (lower-id, higher-id) participant pair, so initiating a DM that
- *    already exists returns the existing conversation. It blocks self-DMs and
- *    verifies the target user exists before creating.
+ *  - `startDm` is idempotent: a DM is uniquely identified by the canonical
+ *    (lower-id, higher-id) participant pair, so initiating a DM that already
+ *    exists returns the existing conversation. It blocks self-DMs and verifies
+ *    the target user exists before creating.
  *  - `listDmMessages` enforces participant access control, then paginates the
  *    DM timeline with the same opaque (createdAt, id) cursor contract used by
  *    the channel message timeline.
- *
- * The rationale for the design choices in this file — canonical-pair
- * idempotency with a P2002 race fallback, the self-DM block, the target-user
- * existence check, the duplicated cursor/DTO helpers, and the activity-based
- * DM ordering — is recorded in /docs/decision-log.md, not in code comments
- * (Explainability rule, AAP §0.8.3).
  */
 
 import { prisma, Prisma } from '@app/db';
@@ -48,7 +42,7 @@ import type { MessageWithAuthor } from '@app/shared/types/message';
 import type { StartDmInput } from '@app/shared/schemas/dm';
 
 /**
- * Input contract for {@link createOrFindDm}. Routes construct this after Zod
+ * Input contract for {@link startDm}. Routes construct this after Zod
  * validation, populating `initiatorId` from the authenticated principal and
  * `otherUserId` from the validated request body.
  *
@@ -294,7 +288,8 @@ function toMessageDto(
  * Each conversation is hydrated with both participants and the timestamp of
  * its most-recent message. Results are ordered most-recently-active first
  * (latest message timestamp, falling back to the conversation creation time
- * for empty conversations).
+ * for empty conversations). The result set is capped at `MAX_PAGE_SIZE`
+ * conversations so the method can never return an unbounded list at PoC scale.
  *
  * @param userId - the requesting user's id.
  * @returns the user's DM conversations, newest-activity first.
@@ -317,6 +312,7 @@ export async function listDms(userId: string): Promise<DMWithParticipants[]> {
       },
     },
     orderBy: { createdAt: 'desc' },
+    take: MAX_PAGE_SIZE,
   });
 
   const conversations = dms.map(toDmDto);
@@ -354,7 +350,7 @@ export async function listDms(userId: string): Promise<DMWithParticipants[]> {
  * @throws {ForbiddenError} when `initiatorId === otherUserId` (no self-DMs).
  * @throws {NotFoundError} when the target user does not exist.
  */
-export async function createOrFindDm(
+export async function startDm(
   input: CreateOrFindDmInput,
 ): Promise<DMWithParticipants> {
   const { initiatorId, otherUserId } = input;
@@ -396,7 +392,7 @@ export async function createOrFindDm(
   if (existing !== null) {
     logger.debug(
       { dmId: existing.id, initiatorId, otherUserId },
-      'dms.createOrFind.found',
+      'dms.startDm.found',
     );
     return toDmDto(existing);
   }
@@ -424,7 +420,7 @@ export async function createOrFindDm(
 
     logger.info(
       { dmId: created.id, initiatorId, otherUserId },
-      'dms.createOrFind.created',
+      'dms.startDm.created',
     );
     return toDmDto(created);
   } catch (err) {
@@ -453,7 +449,7 @@ export async function createOrFindDm(
       if (raced !== null) {
         logger.debug(
           { dmId: raced.id, initiatorId, otherUserId },
-          'dms.createOrFind.found',
+          'dms.startDm.found',
         );
         return toDmDto(raced);
       }

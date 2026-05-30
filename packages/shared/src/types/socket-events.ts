@@ -3,8 +3,11 @@
  * and @app/web (client).
  *
  * Per AAP §0.4.5, this is the SINGLE declaration site for the real-time event
- * surface. Adding a new event requires updating BOTH this file AND the
- * matching constant in `../constants/events.ts`.
+ * surface. Each interface key is a COMPUTED property name bound to the matching
+ * `as const` string constant imported from `../constants/events.ts`, so the
+ * event-name string literals are never duplicated here — `constants/events.ts`
+ * is the single source of truth for the wire names. Adding a new event requires
+ * declaring its constant there and referencing it as a computed key below.
  *
  * Consumers pass these interfaces as generic type arguments:
  *
@@ -41,6 +44,22 @@
  * these interfaces in as generic arguments; the library types do the rest.
  */
 
+import type {
+  CHANNEL_JOIN,
+  CHANNEL_LEAVE,
+  MESSAGE_SEND,
+  REACTION_ADD,
+  REACTION_REMOVE,
+  TYPING_START,
+  TYPING_STOP,
+  PRESENCE_HEARTBEAT,
+  MESSAGE_NEW,
+  MESSAGE_UPDATED,
+  REACTION_ADDED,
+  REACTION_REMOVED,
+  PRESENCE_UPDATE,
+  ERROR,
+} from '../constants/events.js';
 import type { Message, MessageWithAuthor, ReactionSummary } from './message.js';
 import type { PresenceUpdate } from './presence.js';
 
@@ -55,14 +74,14 @@ export interface ClientToServerEvents {
    * @param channelId - The channel to join.
    * @param ack - Acknowledgement: `true` on success, `false` if not a member.
    */
-  'channel:join': (channelId: string, ack: (ok: boolean) => void) => void;
+  [CHANNEL_JOIN]: (channelId: string, ack: (ok: boolean) => void) => void;
 
   /**
    * Unsubscribe the socket from a channel room.
    * @param channelId - The channel to leave.
    * @param ack - Acknowledgement: `true` on success.
    */
-  'channel:leave': (channelId: string, ack: (ok: boolean) => void) => void;
+  [CHANNEL_LEAVE]: (channelId: string, ack: (ok: boolean) => void) => void;
 
   /**
    * Send a new message into a channel, DM, or thread.
@@ -73,7 +92,7 @@ export interface ClientToServerEvents {
    * @param ack - Acknowledgement: the persisted message on success, or an
    *              error envelope on failure.
    */
-  'message:send': (
+  [MESSAGE_SEND]: (
     payload: {
       content: string;
       channelId?: string;
@@ -88,33 +107,33 @@ export interface ClientToServerEvents {
    * Add a reaction emoji to a message. Idempotent — re-adding the same
    * reaction does not duplicate.
    */
-  'reaction:add': (payload: { messageId: string; emoji: string }) => void;
+  [REACTION_ADD]: (payload: { messageId: string; emoji: string }) => void;
 
   /**
    * Remove a reaction emoji from a message. Idempotent — removing a
    * non-existent reaction is a no-op.
    */
-  'reaction:remove': (payload: { messageId: string; emoji: string }) => void;
+  [REACTION_REMOVE]: (payload: { messageId: string; emoji: string }) => void;
 
   /**
    * Notify the server that the user has begun typing in a channel or DM.
    * The server broadcasts a `typing:start` to other room participants.
    * EXACTLY ONE of `channelId` or `dmId` MUST be set.
    */
-  'typing:start': (payload: { channelId?: string; dmId?: string }) => void;
+  [TYPING_START]: (payload: { channelId?: string; dmId?: string }) => void;
 
   /**
    * Notify the server that the user has stopped typing.
    * The server broadcasts a `typing:stop` to other room participants.
    * EXACTLY ONE of `channelId` or `dmId` MUST be set.
    */
-  'typing:stop': (payload: { channelId?: string; dmId?: string }) => void;
+  [TYPING_STOP]: (payload: { channelId?: string; dmId?: string }) => void;
 
   /**
    * Presence heartbeat (emitted by the client every HEARTBEAT_INTERVAL_MS
    * while the tab is focused). The server refreshes the user's Redis TTL.
    */
-  'presence:heartbeat': () => void;
+  [PRESENCE_HEARTBEAT]: () => void;
 }
 
 /**
@@ -128,7 +147,7 @@ export interface ServerToClientEvents {
    * The payload is the fully-hydrated message including author and any
    * attached file.
    */
-  'message:new': (message: MessageWithAuthor) => void;
+  [MESSAGE_NEW]: (message: MessageWithAuthor) => void;
 
   /**
    * A message's content or metadata was updated server-side (e.g., a
@@ -136,47 +155,47 @@ export interface ServerToClientEvents {
    * BARE Message shape (no rehydrated author or reactions); subscribers
    * should reconcile against their local cache.
    */
-  'message:updated': (message: Message) => void;
+  [MESSAGE_UPDATED]: (message: Message) => void;
 
   /**
    * A reaction was added to a message in a subscribed room.
    * The payload contains the updated ReactionSummary so subscribers can
    * replace the message's reaction state directly.
    */
-  'reaction:added': (payload: { messageId: string; reaction: ReactionSummary }) => void;
+  [REACTION_ADDED]: (payload: { messageId: string; reaction: ReactionSummary }) => void;
 
   /**
    * A reaction was removed from a message in a subscribed room.
    * The payload identifies which (emoji, userId) tuple was removed so
    * subscribers can decrement counts without a full ReactionSummary refresh.
    */
-  'reaction:removed': (payload: { messageId: string; emoji: string; userId: string }) => void;
+  [REACTION_REMOVED]: (payload: { messageId: string; emoji: string; userId: string }) => void;
 
   /**
    * A user's presence state transitioned (online ↔ away ↔ offline).
    * Broadcast to subscribers of the relevant `user:<id>` room.
    */
-  'presence:update': (update: PresenceUpdate) => void;
+  [PRESENCE_UPDATE]: (update: PresenceUpdate) => void;
 
   /**
    * Another user has begun typing in a room the socket is subscribed to.
    * EXACTLY ONE of `channelId` or `dmId` is set, matching the originator's
    * `typing:start` payload.
    */
-  'typing:start': (payload: { userId: string; channelId?: string; dmId?: string }) => void;
+  [TYPING_START]: (payload: { userId: string; channelId?: string; dmId?: string }) => void;
 
   /**
    * Another user has stopped typing in a room the socket is subscribed to.
    * EXACTLY ONE of `channelId` or `dmId` is set.
    */
-  'typing:stop': (payload: { userId: string; channelId?: string; dmId?: string }) => void;
+  [TYPING_STOP]: (payload: { userId: string; channelId?: string; dmId?: string }) => void;
 
   /**
    * Generic error envelope emitted to the originating socket when a
    * Client→Server action fails outside of an acknowledgement callback.
    * The string `'error'` is Socket.io's reserved error channel.
    */
-  error: (payload: { code: string; message: string }) => void;
+  [ERROR]: (payload: { code: string; message: string }) => void;
 }
 
 /**

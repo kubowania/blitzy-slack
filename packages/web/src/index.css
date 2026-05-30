@@ -27,6 +27,9 @@
   --color-input: oklch(0.922 0 0);
   --color-ring: oklch(0.708 0 0);
 
+  /* Modal / sheet overlay scrim (semantic token for Dialog/Sheet backdrops) */
+  --color-overlay: oklch(0 0 0 / 0.5);
+
   --radius: 0.625rem;
 
   /* Slack primary accent */

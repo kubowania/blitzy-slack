@@ -19,12 +19,6 @@
  *    relation includes) so the returned DTOs are identical to those produced
  *    by the channel and DM message endpoints, then restores the rank order
  *    in memory.
- *
- * The rationale for the design choices in this file — raw `$queryRaw` over
- * Prisma's `fullTextSearchPostgres` preview feature, the two-query pattern,
- * `plainto_tsquery`, public-channel discoverability, and the in-memory rank
- * sort — is recorded in /docs/decision-log.md, not in code comments
- * (Explainability rule, AAP §0.8.3).
  */
 
 import { prisma, Prisma } from '@app/db';
@@ -264,7 +258,7 @@ export async function searchMessages(
 
   if (hits.length === 0) {
     logger.debug(
-      { userId, query, latencyMs: Date.now() - startMs, count: 0 },
+      { userId, queryLength: query.length, latencyMs: Date.now() - startMs, count: 0 },
       'search.success',
     );
     return [];
@@ -298,7 +292,7 @@ export async function searchMessages(
   }
 
   logger.debug(
-    { userId, query, latencyMs: Date.now() - startMs, count: ordered.length },
+    { userId, queryLength: query.length, latencyMs: Date.now() - startMs, count: ordered.length },
     'search.success',
   );
 
