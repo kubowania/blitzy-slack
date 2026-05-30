@@ -16,7 +16,7 @@ import { useAuthStore } from '@/stores/auth.store';
  * client EMITS. See packages/shared/src/types/socket-events.ts for the
  * canonical interface declarations and rationale.
  */
-type AppSocket = Socket<ServerToClientEvents, ClientToServerEvents>;
+export type AppSocket = Socket<ServerToClientEvents, ClientToServerEvents>;
 
 /**
  * Module-level singleton holding the active Socket.io client, or `null`
