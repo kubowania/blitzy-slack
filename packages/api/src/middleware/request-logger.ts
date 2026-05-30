@@ -59,7 +59,7 @@ export const requestLogger: HttpLogger<Request, Response> = pinoHttp({
   customErrorMessage: (req: Request, res: Response) => {
     return `${req.method} ${req.url} ${res.statusCode} ERROR`;
   },
-  customProps: (req: Request) => {
+  customProps: (req: Request & { user?: { id?: string } }) => {
     const userId = req.user?.id;
     return userId !== undefined ? { userId } : {};
   },
