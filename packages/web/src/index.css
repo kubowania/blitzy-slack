@@ -45,6 +45,9 @@
   --color-sidebar-primary-foreground: oklch(0.985 0 0);
   --color-sidebar-border: oklch(0.234 0.086 326);
   --color-sidebar-ring: oklch(0.545 0.096 323);
+  /* Selected/active sidebar row: light-lavender pill fill + dark-aubergine text */
+  --color-sidebar-accent: oklch(0.95 0.02 320);
+  --color-sidebar-accent-foreground: oklch(0.21 0.045 318);
 }
 
 @layer base {
