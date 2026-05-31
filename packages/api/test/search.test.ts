@@ -101,7 +101,11 @@ describe('GET /api/search?q=', () => {
 
       const body = response.body as SearchResponse;
       expect(body.results).toHaveLength(1);
-      expect(body.results[0].content).toContain('pineapple');
+      const [firstResult] = body.results;
+      if (firstResult === undefined) {
+        throw new Error('expected exactly one search result');
+      }
+      expect(firstResult.content).toContain('pineapple');
     });
 
     it('finds messages in a DM where the caller is a participant', async () => {
@@ -174,6 +178,9 @@ describe('GET /api/search?q=', () => {
       const results: MessageWithAuthor[] = body.results;
       expect(results).toHaveLength(1);
       const [match] = results;
+      if (match === undefined) {
+        throw new Error('expected exactly one search result');
+      }
       expect(match.content).toContain('distinctive-keyword-12345');
       expect(match.authorId).toBe(user.id);
       expect(match.author.id).toBe(user.id);
@@ -414,7 +421,12 @@ describe('GET /api/search?q=', () => {
       const channel = await createTestChannel({ token, isPrivate: false });
       await prismaTest.message.createMany({
         data: [
-          { content: 'the quick brown fox', authorId: user.id, channelId: channel.id, parentId: null },
+          {
+            content: 'the quick brown fox',
+            authorId: user.id,
+            channelId: channel.id,
+            parentId: null,
+          },
           { content: 'a slow turtle', authorId: user.id, channelId: channel.id, parentId: null },
         ],
       });
