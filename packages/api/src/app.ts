@@ -18,8 +18,8 @@
  * suite without shared state.
  *
  * Design rationale and trade-offs for the choices in this file (helmet CORP
- * cross-origin, disabled CSP, 1 MB body limit, CORS credentials, JSON 404,
- * and the deliberate omission of static file serving) are recorded in
+ * cross-origin, environment-gated CSP, 1 MB body limit, CORS credentials, JSON
+ * 404, and the deliberate omission of static file serving) are recorded in
  * /docs/decision-log.md per the Explainability rule (AAP §0.8.3), not in
  * these comments.
  */
@@ -71,10 +71,24 @@ export function createApp(): Application {
       // server origin. Without this, <img src="http://localhost:3000/..."> from
       // http://localhost:5173 is blocked by Cross-Origin-Resource-Policy.
       crossOriginResourcePolicy: { policy: 'cross-origin' },
-      // CSP is intentionally disabled for the PoC: Vite HMR injects inline
-      // scripts and Tailwind v4 injects inline styles during development.
-      // (Trade-off recorded in /docs/decision-log.md.)
-      contentSecurityPolicy: false,
+      // CSP is enforced in production but relaxed (disabled) outside it, where
+      // Vite HMR injects inline scripts and Tailwind v4 injects inline styles
+      // that a strict policy would block. (Trade-off in /docs/decision-log.md.)
+      contentSecurityPolicy:
+        env.NODE_ENV === 'production'
+          ? {
+              useDefaults: true,
+              directives: {
+                defaultSrc: ["'self'"],
+                scriptSrc: ["'self'"],
+                imgSrc: ["'self'", 'data:', 'blob:'],
+                objectSrc: ["'none'"],
+                // Removed so a PoC served over plain HTTP is not force-upgraded
+                // to HTTPS; re-enable behind TLS termination in a real deploy.
+                upgradeInsecureRequests: null,
+              },
+            }
+          : false,
     }),
   );
 

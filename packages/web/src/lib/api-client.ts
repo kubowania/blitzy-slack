@@ -207,6 +207,58 @@ async function request<T>(
 }
 
 /**
+ * Fetches a binary resource (e.g., an uploaded file) as a `Blob` with the
+ * Authorization header attached, used by the secure file-download path.
+ *
+ * Auth-gated routes such as `GET /api/files/:id` require the bearer JWT, which a
+ * raw `<img src>` or anchor `href` cannot carry. Callers therefore fetch the
+ * bytes here (token attached, same `VITE_API_URL` origin via `buildUrl`) and
+ * wrap the result in an object URL (`URL.createObjectURL`) for `<img src>` or a
+ * download anchor.
+ *
+ * Behavior mirrors {@link request}'s auth and failure handling:
+ *   - injects the Authorization header when a JWT is present;
+ *   - on a 401, runs the shared `performLogout()` teardown before throwing;
+ *   - on any non-2xx, throws `ApiError(message, status, body)`;
+ *   - on a fetch rejection (network failure / abort), throws
+ *     `ApiError(message, 0, null)`.
+ */
+async function requestBlob(path: string, options?: { signal?: AbortSignal }): Promise<Blob> {
+  const headers: Record<string, string> = {
+    ...authHeader(),
+  };
+
+  let response: Response;
+  try {
+    response = await fetch(buildUrl(path), {
+      method: 'GET',
+      headers,
+      signal: options?.signal,
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Network request failed';
+    throw new ApiError(message, 0, null);
+  }
+
+  if (response.status === 401) {
+    performLogout();
+    const errBody = await parseBody(response);
+    throw new ApiError(extractErrorMessage(errBody, 'Unauthorized'), 401, errBody);
+  }
+
+  if (!response.ok) {
+    const errBody = await parseBody(response);
+    throw new ApiError(
+      extractErrorMessage(errBody, `HTTP ${response.status}`),
+      response.status,
+      errBody,
+    );
+  }
+
+  return response.blob();
+}
+
+/**
  * Typed HTTP client for the Slack-clone REST API.
  *
  * Endpoint surface (per AAP §0.6.1 and the folder spec):
@@ -241,5 +293,15 @@ export const apiClient = {
 
   upload<T>(path: string, formData: FormData, options?: RequestOptions<T>): Promise<T> {
     return request<T>('POST', path, formData, options);
+  },
+
+  /**
+   * Fetches a binary resource as a `Blob` with the bearer token attached. Use
+   * for auth-gated assets (e.g., `GET /api/files/:id`) that cannot be loaded via
+   * an unauthenticated `<img src>` / anchor `href`. Pair with
+   * `URL.createObjectURL` to obtain a usable object URL.
+   */
+  getBlob(path: string, options?: { signal?: AbortSignal }): Promise<Blob> {
+    return requestBlob(path, options);
   },
 } as const;

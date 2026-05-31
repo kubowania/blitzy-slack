@@ -2,9 +2,9 @@
  * Client-side routing surface for the Blitzy Slack web client (`@app/web`).
  *
  * Exports the named {@link Router} component, which declares the application's
- * entire `<Routes>` tree. The `BrowserRouter` provider is mounted by
- * {@link App} (`./App`); this module contributes only the route declarations and
- * the authentication guards that gate them.
+ * entire `<Routes>` tree. The `BrowserRouter` provider is mounted in
+ * `./main.tsx` (above `<App />`); this module contributes only the route
+ * declarations and the authentication guards that gate them.
  *
  * Route map (AAP §0.6.3):
  *

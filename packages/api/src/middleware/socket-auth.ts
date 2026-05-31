@@ -7,9 +7,10 @@
  * `socket.data.userId` and `socket.data.email` without re-parsing the token.
  *
  * Real-time contract (AAP Rule 2): WebSocket connections are authenticated
- * identically to HTTP routes. The token travels in the handshake — preferred
- * via `socket.handshake.auth.token`, with `socket.handshake.query.token` as a
- * fallback for transports that cannot carry the auth payload.
+ * identically to HTTP routes. The token travels in the handshake exclusively
+ * via `socket.handshake.auth.token`; query-string tokens are NOT accepted
+ * because they are prone to leaking into access logs, browser history, and
+ * diagnostics.
  *
  * Single-verifier discipline (AAP §0.8.4): verification is delegated to the
  * SAME `verifyToken` helper the HTTP `requireAuth` middleware uses; this module
@@ -54,22 +55,22 @@ interface SocketData {
 type HandshakeSocket = Socket<DefaultEventsMap, DefaultEventsMap, DefaultEventsMap, SocketData>;
 
 /**
- * Reads the JWT from the Socket.io handshake, preferring `handshake.auth.token`
- * and falling back to `handshake.query.token`. Returns the token string, or
- * `undefined` when neither source carries a non-empty string.
+ * Reads the JWT from the Socket.io handshake `auth` payload
+ * (`handshake.auth.token`). Returns the token string, or `undefined` when it is
+ * missing or is not a non-empty string.
+ *
+ * Only `handshake.auth.token` is honored — query-string tokens are rejected
+ * because they leak into access logs, browser history, and diagnostics. The web
+ * client always sends the token via `auth.token`.
  *
  * The `auth` value is read through an `unknown` binding because Socket.io types
- * `handshake.auth` with an `any`-valued index signature; the `typeof` guards
- * narrow it back to a concrete `string`. This helper never throws.
+ * `handshake.auth` with an `any`-valued index signature; the `typeof` guard
+ * narrows it back to a concrete `string`. This helper never throws.
  */
 const extractToken = (socket: HandshakeSocket): string | undefined => {
   const fromAuth: unknown = socket.handshake.auth.token;
   if (typeof fromAuth === 'string' && fromAuth.length > 0) {
     return fromAuth;
-  }
-  const fromQuery = socket.handshake.query.token;
-  if (typeof fromQuery === 'string' && fromQuery.length > 0) {
-    return fromQuery;
   }
   return undefined;
 };

@@ -19,8 +19,10 @@ import { apiClient } from '@/lib/api-client';
 import { cn } from '@/lib/utils';
 
 import { SearchResultItem } from '@/components/search/SearchResultItem';
+import { useChannels } from '@/hooks/useChannels';
 
 import type { MessageWithAuthor, SearchResponse } from '@app/shared/types/message';
+import type { ChannelSummary } from '@app/shared/types/channel';
 
 export interface SearchResultsListProps {
   className?: string;
@@ -45,17 +47,23 @@ export function SearchResultsList({ className }: SearchResultsListProps) {
     () => messages.filter((message) => message.file !== null),
     [messages],
   );
-  const channelIds = React.useMemo<string[]>(
-    () =>
-      Array.from(
-        new Set(
-          messages
-            .map((message) => message.channelId)
-            .filter((channelId): channelId is string => channelId !== null),
-        ),
-      ),
-    [messages],
-  );
+
+  // Channel search is satisfied client-side from the authenticated user's
+  // visible channel list (`GET /api/channels`, ACL-safe: public + joined
+  // private channels). Matching by name keeps the Channels tab real without a
+  // dedicated channel-search endpoint, which is out of scope per the AAP.
+  const {
+    channels: visibleChannels,
+    isLoading: channelsLoading,
+    error: channelsError,
+  } = useChannels();
+  const matchedChannels = React.useMemo<ChannelSummary[]>(() => {
+    if (query.length === 0) {
+      return [];
+    }
+    const lowerQuery = query.toLowerCase();
+    return visibleChannels.filter((channel) => channel.name.toLowerCase().includes(lowerQuery));
+  }, [visibleChannels, query]);
 
   return (
     <div className={cn('flex h-full flex-col', className)}>
@@ -65,7 +73,7 @@ export function SearchResultsList({ className }: SearchResultsListProps) {
         <Tabs defaultValue="messages" className="flex h-full flex-col">
           <TabsList className="w-fit">
             <TabsTrigger value="messages">Messages ({messages.length})</TabsTrigger>
-            <TabsTrigger value="channels">Channels ({channelIds.length})</TabsTrigger>
+            <TabsTrigger value="channels">Channels ({matchedChannels.length})</TabsTrigger>
             <TabsTrigger value="files">Files ({fileMessages.length})</TabsTrigger>
           </TabsList>
 
@@ -80,7 +88,13 @@ export function SearchResultsList({ className }: SearchResultsListProps) {
           </TabsContent>
 
           <TabsContent value="channels" className="mt-4 min-h-0 flex-1">
-            <ChannelsTabContent />
+            <ChannelsTabContent
+              query={query}
+              channels={matchedChannels}
+              isLoading={channelsLoading}
+              isError={channelsError !== null}
+              error={channelsError}
+            />
           </TabsContent>
 
           <TabsContent value="files" className="mt-4 min-h-0 flex-1">
@@ -207,19 +221,50 @@ function FilesTabContent({ fileMessages, isLoading, isError, error }: FilesTabCo
   );
 }
 
-function ChannelsTabContent() {
+interface ChannelsTabContentProps {
+  query: string;
+  channels: ChannelSummary[];
+  isLoading: boolean;
+  isError: boolean;
+  error: unknown;
+}
+
+function ChannelsTabContent({
+  query,
+  channels,
+  isLoading,
+  isError,
+  error,
+}: ChannelsTabContentProps) {
+  if (isLoading) {
+    return <SearchSkeletons />;
+  }
+  if (isError) {
+    return <SearchErrorState error={error} />;
+  }
+  if (channels.length === 0) {
+    return (
+      <Empty>
+        <EmptyHeader>
+          <EmptyMedia variant="icon">
+            <SearchIcon className="size-5" />
+          </EmptyMedia>
+          <EmptyTitle>No channels found</EmptyTitle>
+          <EmptyDescription>
+            No channels match &ldquo;{query}&rdquo;. Try a different search term.
+          </EmptyDescription>
+        </EmptyHeader>
+      </Empty>
+    );
+  }
   return (
-    <Empty>
-      <EmptyHeader>
-        <EmptyMedia variant="icon">
-          <SearchIcon className="size-5" />
-        </EmptyMedia>
-        <EmptyTitle>Channel search coming soon</EmptyTitle>
-        <EmptyDescription>
-          Search currently matches message content. To browse channels, use the sidebar.
-        </EmptyDescription>
-      </EmptyHeader>
-    </Empty>
+    <ScrollArea className="h-full">
+      <div className="flex flex-col gap-1 pr-2">
+        {channels.map((channel) => (
+          <SearchResultItem key={channel.id} variant="channel" result={channel} />
+        ))}
+      </div>
+    </ScrollArea>
   );
 }
 

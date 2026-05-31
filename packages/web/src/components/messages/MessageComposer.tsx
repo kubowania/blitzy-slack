@@ -13,9 +13,6 @@
  *   - {@link FileUploadButton} uploads a single attachment to `/api/files` and
  *     {@link FilePreview} shows the attached file with a remove control — one
  *     file per message.
- *   - A row of decorative toolbar buttons (more, formatting, mention, video,
- *     audio, workflow) reproduces the Slack composer chrome; they are inert in
- *     this proof-of-concept.
  *   - The Send button submits the form.
  *
  * Form state is owned by react-hook-form with `zodResolver(sendMessageSchema)`,
@@ -36,21 +33,10 @@ import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
-import {
-  Smile,
-  Send,
-  Plus,
-  AtSign,
-  TextCursorInput,
-  Video,
-  Mic,
-  Workflow,
-  X,
-} from 'lucide-react';
+import { Smile, Send, X } from 'lucide-react';
 
 import { Button } from '@/components/ui/button';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
-import { Separator } from '@/components/ui/separator';
 import { RichTextEditor } from './RichTextEditor';
 import { EmojiPicker } from './EmojiPicker';
 import { TypingIndicator } from './TypingIndicator';
@@ -298,15 +284,13 @@ export function MessageComposer({
 
           {/* Bottom toolbar. */}
           <div className="flex items-center justify-between px-2 py-1.5 border-t border-border">
-            {/* Left cluster: decorative buttons, emoji picker, and file upload. */}
+            {/* Left cluster: emoji picker and file upload — the only in-scope
+                composer actions for this proof-of-concept. */}
             <div
               className="flex items-center gap-0.5"
               role="toolbar"
               aria-label="Composer actions"
             >
-              <DecorativeButton icon={Plus} label="More" />
-              <DecorativeButton icon={TextCursorInput} label="Formatting" />
-
               <EmojiPicker
                 trigger={
                   <Button
@@ -327,17 +311,10 @@ export function MessageComposer({
                 side="top"
               />
 
-              <DecorativeButton icon={AtSign} label="Mention someone" />
-              <Separator orientation="vertical" className="mx-1 h-5" />
-
               <FileUploadButton
                 onFileUploaded={handleFileUploaded}
                 disabled={attachedFile !== null || sendMutation.isPending}
               />
-
-              <DecorativeButton icon={Video} label="Record video" />
-              <DecorativeButton icon={Mic} label="Record audio" />
-              <DecorativeButton icon={Workflow} label="Workflow" />
             </div>
 
             {/* Right cluster: the send button. */}
@@ -399,40 +376,4 @@ function computePlaceholder({
     return 'Message';
   }
   return 'Message';
-}
-
-/**
- * Props for the file-scoped {@link DecorativeButton}.
- */
-interface DecorativeButtonProps {
-  icon: React.ComponentType<React.SVGAttributes<SVGElement>>;
-  label: string;
-}
-
-/**
- * A toolbar icon button that reproduces a piece of the Slack composer chrome
- * without wiring any behavior. Each button is labelled for assistive technology
- * and surfaces its label on hover through a tooltip. These controls are inert
- * in the proof-of-concept.
- */
-function DecorativeButton({ icon: Icon, label }: DecorativeButtonProps): React.JSX.Element {
-  return (
-    <Tooltip>
-      <TooltipTrigger asChild>
-        <Button
-          type="button"
-          variant="ghost"
-          size="icon"
-          className="size-7 text-muted-foreground"
-          aria-label={label}
-          onClick={() => {
-            // Decorative-only in the proof-of-concept; no behavior is wired.
-          }}
-        >
-          <Icon className="size-4" />
-        </Button>
-      </TooltipTrigger>
-      <TooltipContent>{label}</TooltipContent>
-    </Tooltip>
-  );
 }

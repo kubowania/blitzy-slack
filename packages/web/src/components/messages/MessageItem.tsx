@@ -114,6 +114,7 @@ export function MessageItem({
 
   return (
     <article
+      id={`message-${message.id}`}
       data-slot="message-item"
       data-message-id={message.id}
       data-thread-reply={isThreadReply ? 'true' : 'false'}
@@ -195,14 +196,15 @@ export function MessageItem({
 
         {/* Persistent thread reply-count link */}
         {hasReplies ? (
-          <button
+          <Button
             type="button"
+            variant="ghost"
+            size="sm"
             onClick={handleOpenThread}
             className={cn(
-              'mt-1 inline-flex items-center gap-1.5 rounded-md px-2 py-1 text-xs',
-              'border border-transparent hover:border-border hover:bg-background',
-              'font-medium text-primary transition-colors',
-              'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
+              'mt-1 h-auto w-fit gap-1.5 px-2 py-1 text-xs font-medium has-[>svg]:px-2',
+              'border border-transparent text-primary',
+              'hover:border-border hover:bg-background hover:text-primary',
             )}
             aria-label={`${message.replyCount} ${replyNoun} — open thread`}
           >
@@ -210,16 +212,17 @@ export function MessageItem({
             <span>
               {message.replyCount} {replyNoun}
             </span>
-          </button>
+          </Button>
         ) : null}
       </div>
 
-      {/* Hover-only action toolbar (revealed via the group-hover state) */}
+      {/* Action toolbar revealed on hover OR keyboard focus within the message
+          (group-focus-within), so keyboard users get an equivalent reveal. */}
       <div
         className={cn(
           'absolute -top-3 right-4 z-10',
-          'opacity-0 transition-opacity group-hover:opacity-100',
-          'pointer-events-none group-hover:pointer-events-auto',
+          'opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100',
+          'pointer-events-none group-hover:pointer-events-auto group-focus-within:pointer-events-auto',
           'flex items-center gap-0.5 rounded-md border border-border bg-popover p-0.5 shadow-md',
         )}
         role="toolbar"

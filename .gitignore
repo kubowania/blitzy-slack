@@ -31,6 +31,9 @@ test-results/
 playwright-report/
 playwright/.cache/
 playwright/.auth/
+# Playwright visual-baseline snapshots seeded at runtime by the
+# screenshot-fidelity suite (binary PNGs); never tracked in source.
+__screenshots__/
 # Blitzy ad-hoc validation test files (never committed)
 blitzy_adhoc_test_*
 

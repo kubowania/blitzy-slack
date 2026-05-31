@@ -6,9 +6,9 @@ import { usePresence } from '@/hooks/usePresence';
 import { cn } from '@/lib/utils';
 
 const STATE_COLOR_CLASSES: Record<PresenceState, string> = {
-  online: 'bg-green-500',
-  away: 'bg-yellow-500',
-  offline: 'bg-gray-400',
+  online: 'bg-presence-online',
+  away: 'bg-presence-away',
+  offline: 'bg-presence-offline',
 };
 
 const STATE_LABELS: Record<PresenceState, string> = {

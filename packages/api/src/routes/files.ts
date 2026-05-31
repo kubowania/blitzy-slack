@@ -19,9 +19,9 @@
  * whose message references the file). The service throws NotFoundError (→404) or
  * ForbiddenError (→403); the errorHandler renders the standard error envelope.
  *
- * (Rationale and trade-offs for the choices below — `inline` disposition, the
- * ValidationError path, and the sendFile error response — live in
- * /docs/decision-log.md per the Explainability rule, not in these comments.)
+ * (Rationale and trade-offs for the choices below — MIME-gated Content-
+ * Disposition, the ValidationError path, and the sendFile error response — live
+ * in /docs/decision-log.md per the Explainability rule, not in these comments.)
  */
 
 // Bare type-only import that loads pino-http's `declare module "http"`
@@ -46,6 +46,30 @@ import { createFile, getFile } from '../services/files.service.js';
  * any unexpected extra params on the route.
  */
 const fileIdParamsSchema = z.object({ id: z.string().cuid() }).strict();
+
+/**
+ * MIME types (beyond raster images) served with an `inline` Content-Disposition.
+ * Everything outside this allowlist — notably `text/html`, `image/svg+xml`, and
+ * unknown/binary types — is served as an `attachment` so a malicious upload
+ * cannot execute scripts under the API origin if it is loaded into a document
+ * context. Paired with `X-Content-Type-Options: nosniff`.
+ */
+const INLINE_SAFE_MIME_TYPES: ReadonlySet<string> = new Set(['application/pdf', 'text/plain']);
+
+/**
+ * Returns `true` when a file of the given MIME type is safe to render inline.
+ * Raster images are inline-safe; SVG is NOT (it can carry inline scripts), and
+ * any type outside the small allowlist defaults to `attachment`.
+ */
+function isInlineSafeMime(mimeType: string): boolean {
+  if (mimeType === 'image/svg+xml') {
+    return false;
+  }
+  if (mimeType.startsWith('image/')) {
+    return true;
+  }
+  return INLINE_SAFE_MIME_TYPES.has(mimeType);
+}
 
 /**
  * Files router, mounted at `/files` by the routes barrel so the effective paths
@@ -122,9 +146,17 @@ router.get(
     // (not the random storedName) in the Content-Disposition header. The name is
     // percent-encoded so special characters do not break the header.
     res.setHeader('Content-Type', file.mimeType);
+    // Block MIME-sniffing so the browser honors the declared Content-Type and
+    // cannot reinterpret a risky upload as executable content.
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    // Only an allowlist of safe types renders inline; everything else (HTML,
+    // SVG, unknown/binary) downloads as an attachment. Defense in depth — the
+    // web client fetches the bytes via the authenticated API client regardless,
+    // so this header does not affect the in-app preview/download path.
+    const disposition = isInlineSafeMime(file.mimeType) ? 'inline' : 'attachment';
     res.setHeader(
       'Content-Disposition',
-      `inline; filename="${encodeURIComponent(file.originalName)}"`,
+      `${disposition}; filename="${encodeURIComponent(file.originalName)}"`,
     );
 
     // Stream the file with streaming I/O (no full-file memory load). The

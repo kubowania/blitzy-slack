@@ -1,9 +1,7 @@
 import * as React from 'react';
 import { useParams } from 'react-router';
-import { Hash, HelpCircle, Lock, Users } from 'lucide-react';
+import { Hash, Lock } from 'lucide-react';
 
-import { Button } from '@/components/ui/button';
-import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
 import { SearchBar } from '@/components/search/SearchBar';
 import { useChannels } from '@/hooks/useChannels';
 import { cn } from '@/lib/utils';
@@ -30,11 +28,10 @@ interface HeaderRouteParams extends Record<string, string | undefined> {
  *   {@link useChannels}; DM and thread routes show a static title; every other
  *   route falls back to the product name.
  * - Center: the shared {@link SearchBar}, the single search entry point.
- * - Right: `Help` and `Members` ghost icon buttons, each wrapped in a `Tooltip`.
- *   Both tooltips share one `TooltipProvider` for hover-delay management. These
- *   two features are out of scope for this proof-of-concept, so the buttons are
- *   rendered `disabled` (rather than appearing interactive but doing nothing);
- *   their unavailability is conveyed via the tooltip and `aria-label`.
+ * - Right: an empty flex spacer that mirrors the left slot's width so the
+ *   centered search bar stays horizontally centered. (Help and member-list
+ *   surfaces are out of scope for this proof-of-concept, so no controls are
+ *   rendered here.)
  *
  * Standard `<header>` attributes (including `className`) are forwarded so a
  * consumer can override layout; the app shell renders it without extra props.
@@ -85,39 +82,9 @@ export function Header({ className, ...props }: React.ComponentProps<'header'>) 
         <SearchBar />
       </div>
 
-      {/* Right: help + members icon buttons. */}
-      <div className="flex shrink-0 items-center gap-1">
-        <TooltipProvider delayDuration={200}>
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <Button
-                type="button"
-                variant="ghost"
-                size="icon"
-                aria-label="Help (coming soon)"
-                disabled
-              >
-                <HelpCircle className="size-4" aria-hidden="true" />
-              </Button>
-            </TooltipTrigger>
-            <TooltipContent side="bottom">Help (coming soon)</TooltipContent>
-          </Tooltip>
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <Button
-                type="button"
-                variant="ghost"
-                size="icon"
-                aria-label="Members (coming soon)"
-                disabled
-              >
-                <Users className="size-4" aria-hidden="true" />
-              </Button>
-            </TooltipTrigger>
-            <TooltipContent side="bottom">Members (coming soon)</TooltipContent>
-          </Tooltip>
-        </TooltipProvider>
-      </div>
+      {/* Right: empty spacer mirroring the left slot's flex-1 width so the
+          centered search bar stays horizontally centered. */}
+      <div className="flex-1" aria-hidden="true" />
     </header>
   );
 }

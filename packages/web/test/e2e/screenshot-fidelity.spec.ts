@@ -187,7 +187,7 @@ test.describe('Screenshot Fidelity (Gate 8)', () => {
         // avatars — so layout is asserted without their churn.
         mask: [
           page.locator('time'),
-          page.locator('[data-presence-indicator]'),
+          page.locator('[data-slot="presence-indicator"]'),
           page.locator('[aria-label*="ago" i]'),
           page.locator('[data-slot="avatar"]'),
         ],

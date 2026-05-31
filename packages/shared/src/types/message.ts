@@ -92,9 +92,13 @@ export interface FileAttachment {
   /** ISO 8601 timestamp of upload. */
   createdAt: string;
   /**
-   * Public URL where the file is served by Express static (or a signed-URL
-   * substitute in a future S3 integration). The client uses this directly
-   * in `<img src>` or download links.
+   * Relative API path of the auth-gated download route for this file
+   * (`/api/files/:id`). The route requires `Authorization: Bearer <jwt>`, so
+   * this URL CANNOT be used directly in a raw `<img src>` or anchor `href`
+   * (those requests carry no token and receive 401). Clients must fetch the
+   * bytes through the authenticated API client and render them via an object
+   * URL — see the web client's `useAuthenticatedImage` hook and `downloadFile`
+   * helper. The web client prefixes its configured API origin (`VITE_API_URL`).
    */
   url: string;
 }

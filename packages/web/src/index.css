@@ -48,6 +48,17 @@
   /* Selected/active sidebar row: light-lavender pill fill + dark-aubergine text */
   --color-sidebar-accent: oklch(0.95 0.02 320);
   --color-sidebar-accent-foreground: oklch(0.21 0.045 318);
+
+  /* Presence dot states (semantic tokens; AAP §0.5.3 token discipline). Values
+     match Tailwind's green-500 / yellow-500 / gray-400 so the dots are visually
+     identical to the previous palette classes, now referenced by semantic name. */
+  --color-presence-online: oklch(72.3% 0.219 149.579);
+  --color-presence-away: oklch(79.5% 0.184 86.047);
+  --color-presence-offline: oklch(70.7% 0.022 261.325);
+
+  /* Search-hit highlight (semantic token). Matches Tailwind's yellow-200; used
+     with an /opacity modifier (bg-search-highlight/70) by the search excerpt. */
+  --color-search-highlight: oklch(94.5% 0.129 101.54);
 }
 
 @layer base {

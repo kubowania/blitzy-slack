@@ -127,7 +127,7 @@ export function StartDmDialog({
         </DialogHeader>
         <Command shouldFilter={false} className="border-t">
           <CommandInput
-            placeholder="Search by name or email…"
+            placeholder="Search by name…"
             value={rawQuery}
             onValueChange={setRawQuery}
             disabled={startDmMutation.isPending}
@@ -142,9 +142,7 @@ export function StartDmDialog({
               <CommandEmpty>
                 <Empty className="border-0 py-6">
                   <EmptyTitle>No users found</EmptyTitle>
-                  <EmptyDescription>
-                    Try a different name or email.
-                  </EmptyDescription>
+                  <EmptyDescription>Try a different name.</EmptyDescription>
                 </Empty>
               </CommandEmpty>
             ) : null}

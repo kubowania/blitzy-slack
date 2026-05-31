@@ -2,13 +2,30 @@ import * as React from 'react';
 import { Link } from 'react-router';
 import { Hash, Lock, ImageIcon, FileText, File as FileIcon } from 'lucide-react';
 import { formatDistanceToNow } from 'date-fns';
+import { toast } from 'sonner';
 
 import { Item, ItemContent, ItemDescription, ItemMedia, ItemTitle } from '@/components/ui/item';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
+import { Spinner } from '@/components/ui/spinner';
 import { cn } from '@/lib/utils';
+import { downloadFile } from '@/lib/file-download';
 
-import type { Channel } from '@app/shared/types/channel';
 import type { FileAttachment, MessageWithAuthor } from '@app/shared/types/message';
+
+/**
+ * Minimal channel shape rendered by the `channel` search variant.
+ *
+ * Broader than `ChannelSummary` (adds an optional `description`) yet narrower
+ * than the full `Channel` DTO, so the Channels search tab can pass the sidebar
+ * `ChannelSummary[]` from `useChannels()` directly. `description` is
+ * optional/nullable because `ChannelSummary` omits it.
+ */
+export interface ChannelSearchResultData {
+  id: string;
+  name: string;
+  isPrivate: boolean;
+  description?: string | null;
+}
 
 export type SearchResultItemProps =
   | {
@@ -19,7 +36,7 @@ export type SearchResultItemProps =
     }
   | {
       variant: 'channel';
-      result: Channel;
+      result: ChannelSearchResultData;
       className?: string;
     }
   | {
@@ -123,7 +140,7 @@ function HighlightedExcerpt({ content, query }: HighlightedExcerptProps) {
       idx += 1;
     }
     segments.push(
-      <mark key={`m-${idx}`} className="bg-yellow-200/70 text-foreground rounded-sm px-0.5">
+      <mark key={`m-${idx}`} className="bg-search-highlight/70 text-foreground rounded-sm px-0.5">
         {content.slice(matchAt, matchAt + trimmedQuery.length)}
       </mark>,
     );
@@ -134,7 +151,7 @@ function HighlightedExcerpt({ content, query }: HighlightedExcerptProps) {
 }
 
 interface ChannelSearchResultProps {
-  result: Channel;
+  result: ChannelSearchResultData;
   className?: string;
 }
 
@@ -168,6 +185,7 @@ interface FileSearchResultProps {
 }
 
 function FileSearchResult({ result, originatingMessage, className }: FileSearchResultProps) {
+  const [downloading, setDownloading] = React.useState(false);
   const FileTypeIcon = pickFileTypeIcon(result.mimeType);
   const sizeText = formatFileSize(result.sizeBytes);
   const uploadedAt = formatDistanceToNow(new Date(result.createdAt), {
@@ -179,6 +197,22 @@ function FileSearchResult({ result, originatingMessage, className }: FileSearchR
       : `Shared in a direct message · ${uploadedAt}`
     : `Uploaded ${uploadedAt}`;
 
+  // File bytes are served by the auth-gated `GET /api/files/:id` route, so a
+  // raw anchor `href` (no bearer token) would 401. Download through the
+  // authenticated API client instead, surfacing failures via toast.
+  const handleDownload = async (): Promise<void> => {
+    setDownloading(true);
+    try {
+      await downloadFile(result);
+    } catch (error) {
+      toast.error('Download failed', {
+        description: error instanceof Error ? error.message : 'Unable to download the file.',
+      });
+    } finally {
+      setDownloading(false);
+    }
+  };
+
   return (
     <Item
       asChild
@@ -186,14 +220,17 @@ function FileSearchResult({ result, originatingMessage, className }: FileSearchR
       size="default"
       className={cn('hover:bg-muted transition-colors', className)}
     >
-      <a
-        href={result.url}
-        target="_blank"
-        rel="noopener noreferrer"
-        aria-label={`Open ${result.originalName}`}
+      <button
+        type="button"
+        onClick={() => {
+          void handleDownload();
+        }}
+        disabled={downloading}
+        aria-label={`Download ${result.originalName}`}
+        className="w-full text-left"
       >
         <ItemMedia variant="icon">
-          <FileTypeIcon className="size-4" />
+          {downloading ? <Spinner className="size-4" /> : <FileTypeIcon className="size-4" />}
         </ItemMedia>
         <ItemContent>
           <ItemTitle>{result.originalName}</ItemTitle>
@@ -201,7 +238,7 @@ function FileSearchResult({ result, originatingMessage, className }: FileSearchR
             {sizeText} · {contextText}
           </ItemDescription>
         </ItemContent>
-      </a>
+      </button>
     </Item>
   );
 }
