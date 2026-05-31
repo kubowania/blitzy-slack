@@ -76,6 +76,11 @@ lerna-debug.log*
 # Local uploaded files (FILE_UPLOAD_PATH default) — keep the folder via .gitkeep
 uploads/*
 !uploads/.gitkeep
+# The API resolves the default FILE_UPLOAD_PATH (./uploads) against its own
+# working directory (packages/api) when started via `make local`, so uploaded
+# files land here at runtime. This directory is created on demand and cleaned
+# by `make clean`; never track its contents.
+packages/api/uploads/
 
 # Prisma local artifacts
 packages/db/prisma/dev.db

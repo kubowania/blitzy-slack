@@ -40,6 +40,7 @@ import {
   NotFoundError,
   UnauthorizedError,
   ValidationError,
+  type ValidationFieldErrors,
 } from './errors.js';
 
 /**
@@ -47,13 +48,16 @@ import {
  * `error` is a short machine-readable label (e.g., 'BadRequest');
  * `message` is a human-readable explanation;
  * `code` is an optional Prisma/Multer/JWT-specific code;
- * `details` carries Zod field-level issues for 400 responses.
+ * `details` carries field-level validation feedback for 400 responses, in one
+ * of two shapes: the ordered issue list `{ path, message, code }[]` produced
+ * from a raw `ZodError`, or the `field → messages` map carried by the project
+ * `ValidationError` (the shape `validate.ts` builds from `error.flatten().fieldErrors`).
  */
 interface ErrorPayload {
   error: string;
   message: string;
   code?: string;
-  details?: readonly { path: string; message: string; code: string }[];
+  details?: readonly { path: string; message: string; code: string }[] | ValidationFieldErrors;
 }
 
 const formatZodIssues = (
@@ -88,6 +92,32 @@ export const errorHandler: ErrorRequestHandler = (err, req, res, next): void => 
   if (res.headersSent) {
     log.error({ err }, 'Error after response headers sent');
     next(err);
+    return;
+  }
+
+  // 0. Body-parser (express.json / express.urlencoded) errors. A malformed JSON
+  //    body makes express.json() forward a SyntaxError carrying
+  //    `type: 'entity.parse.failed'` and a numeric `status` of 400; an oversized
+  //    body carries `type: 'entity.too.large'` and `status: 413`. These are
+  //    CLIENT input faults, so the parser-assigned 4xx status is honored rather
+  //    than letting them fall through to the generic 500 (which would pollute
+  //    5xx error-rate monitoring and is trivially client-triggerable). The `as`
+  //    narrowing reads the body-parser-specific fields off the untyped error
+  //    without an unsafe `any` access; only errors whose `type` begins with
+  //    `entity.` (a marker no application code sets) match, so a genuine
+  //    application SyntaxError still surfaces as a 500. Rationale in
+  //    /docs/decision-log.md.
+  const bodyParserError = err as { type?: unknown; status?: unknown };
+  if (typeof bodyParserError.type === 'string' && bodyParserError.type.startsWith('entity.')) {
+    const rawStatus = typeof bodyParserError.status === 'number' ? bodyParserError.status : 400;
+    const status = rawStatus >= 400 && rawStatus < 500 ? rawStatus : 400;
+    const payload: ErrorPayload = {
+      error: status === 413 ? 'PayloadTooLarge' : 'BadRequest',
+      message:
+        status === 413 ? 'Request body exceeds the maximum allowed size' : 'Malformed request body',
+    };
+    log.warn({ err, type: bodyParserError.type, status }, 'Body parser rejected request');
+    res.status(status).json(payload);
     return;
   }
 
@@ -193,8 +223,13 @@ export const errorHandler: ErrorRequestHandler = (err, req, res, next): void => 
     const payload: ErrorPayload = {
       error: 'BadRequest',
       message: err.message,
+      // Surface the per-field validation feedback the `validate.ts` middleware
+      // attached (Zod's flattened `fieldErrors`) so clients can identify which
+      // field failed and why (AAP §0.8.2 Gate 12). Omitted only when a service
+      // throws a bare `ValidationError` carrying no field detail.
+      ...(err.details !== undefined ? { details: err.details } : {}),
     };
-    log.warn({ err }, 'Application validation error');
+    log.warn({ err, details: err.details }, 'Application validation error');
     res.status(400).json(payload);
     return;
   }

@@ -12,8 +12,9 @@
  *    `Message` table (provisioned by the `add_message_tsvector` Prisma
  *    migration in packages/db/prisma/migrations) and backed by the
  *    `Message_contentTsv_idx` GIN index.
- *  - Restricts hits to messages the caller may see: channels they belong to,
- *    DMs they participate in, or any public channel.
+ *  - Restricts hits to messages the caller may see: channels they belong to or
+ *    DMs they participate in (membership-restricted per AAP §0.6.2). Public
+ *    channels the caller has not joined are NOT searchable until joined.
  *  - Orders hits by `ts_rank` descending, then `createdAt` descending.
  *  - Re-fetches the matched rows with Prisma's typed client (`findMany` with
  *    relation includes) so the returned DTOs are identical to those produced
@@ -225,8 +226,11 @@ export async function searchMessages(
 
   // Every `${...}` below is bound as a query parameter by the `Prisma.sql`
   // tag; the table and column identifiers are static. The ACL predicate admits
-  // a hit when the message belongs to a channel the user is a member of, a DM
-  // the user participates in, or any public channel.
+  // a hit ONLY when the message belongs to a channel the user is a member of or
+  // a DM the user participates in (AAP §0.6.2 — membership-restricted search).
+  // Public channels the user has not joined are deliberately NOT searchable
+  // until joined, matching the channel-membership ACL applied to the timeline,
+  // thread, and reaction paths. Rationale recorded in /docs/decision-log.md.
   const hits = await prisma.$queryRaw<SearchHitRow[]>(Prisma.sql`
     SELECT
       m."id" AS "id",
@@ -244,12 +248,6 @@ export async function searchMessages(
           SELECT dp."dmId"
           FROM "DMParticipant" dp
           WHERE dp."userId" = ${userId}
-        )
-        OR (
-          m."channelId" IS NOT NULL
-          AND m."channelId" IN (
-            SELECT c."id" FROM "Channel" c WHERE c."isPrivate" = false
-          )
         )
       )
     ORDER BY "rank" DESC, m."createdAt" DESC

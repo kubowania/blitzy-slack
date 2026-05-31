@@ -1,10 +1,21 @@
 import { randomUUID } from 'node:crypto';
+import { mkdirSync } from 'node:fs';
 import { extname } from 'node:path';
 
 import type { RequestHandler } from 'express';
 import multer from 'multer';
 
 import { env } from '../config/env.js';
+
+// Ensure the upload destination exists before multer writes the first file.
+// `env.FILE_UPLOAD_PATH` defaults to `./uploads`, resolved against the API
+// process working directory; a fresh checkout (or a `make clean`) has no such
+// directory, so multer's `diskStorage` would throw `ENOENT` on the very first
+// `POST /api/files`. Creating it here — at module load, recursively, and
+// idempotently — guarantees the directory exists for every entry point (the
+// server bootstrap and the Jest/supertest suites alike) regardless of the
+// configured path. Rationale recorded in /docs/decision-log.md.
+mkdirSync(env.FILE_UPLOAD_PATH, { recursive: true });
 
 /**
  * Multer disk-storage configuration.

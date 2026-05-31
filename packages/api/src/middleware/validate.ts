@@ -38,6 +38,34 @@ function isSchemaMap(candidate: ZodTypeAny | ValidateSchemas): candidate is Vali
 }
 
 /**
+ * Write the parsed (and possibly Zod-`.transform()`-coerced) value back onto a
+ * non-body request target so downstream handlers observe the typed shape.
+ *
+ * Express 5 exposes `req.query` as a lazily-recomputed GETTER on the request
+ * prototype: a plain assignment throws (getter-only) and `Object.assign(req.query, …)`
+ * mutates a throwaway object that the next `req.query` access discards — so a
+ * transforming schema's output (e.g. the presence `userIds` string→string[]
+ * coercion, or a paginating `limit` string→number coercion) is silently lost,
+ * leaving the handler with the raw string. Defining an OWN, configurable data
+ * property shadows the prototype getter so the parsed value persists for the
+ * remainder of the request. `req.params` is a writable own property set by the
+ * router, so the same definition applies uniformly and also survives a future
+ * transforming params schema. Rationale recorded in /docs/decision-log.md.
+ */
+function applyValidated(
+  req: Request,
+  target: Exclude<ValidateTarget, 'body'>,
+  data: unknown,
+): void {
+  Object.defineProperty(req, target, {
+    value: data,
+    writable: true,
+    enumerable: true,
+    configurable: true,
+  });
+}
+
+/**
  * Build an Express middleware that validates a single request property
  * (body | query | params) against the supplied Zod schema. On success,
  * the parsed (potentially transformed) data is written back to
@@ -88,7 +116,7 @@ export function validate(
           next(toValidationError(parsed.error, 'query'));
           return;
         }
-        Object.assign(req.query, parsed.data);
+        applyValidated(req, 'query', parsed.data);
       }
 
       if (schemas.params !== undefined) {
@@ -97,7 +125,7 @@ export function validate(
           next(toValidationError(parsed.error, 'params'));
           return;
         }
-        Object.assign(req.params, parsed.data);
+        applyValidated(req, 'params', parsed.data);
       }
 
       next();
@@ -117,7 +145,7 @@ export function validate(
     if (target === 'body') {
       req.body = data;
     } else {
-      Object.assign(req[target], data);
+      applyValidated(req, target, data);
     }
 
     next();
