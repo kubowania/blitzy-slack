@@ -33,7 +33,7 @@ import { Router, type Request, type Response } from 'express';
 
 import { searchQuerySchema } from '@app/shared/schemas/message';
 import type { SearchQueryInput } from '@app/shared/schemas/message';
-import type { MessageWithAuthor } from '@app/shared/types/message';
+import type { SearchResponse } from '@app/shared/types/message';
 import { PAGE_SIZE } from '@app/shared/constants/limits';
 
 import { requireAuth } from '../middleware/auth.js';
@@ -41,16 +41,6 @@ import { validate } from '../middleware/validate.js';
 import { searchMessages } from '../services/search.service.js';
 
 /**
- * Response body for `GET /api/search`: the matched messages plus an echo of
- * the validated query so the client can render the results header without
- * re-reading the URL. The shape is identical regardless of hit count
- * (`results` is `[]` when nothing matched).
- */
-interface SearchResponse {
-  results: MessageWithAuthor[];
-  query: string;
-}
-
 /**
  * Search router, mounted at `/search` by the routes barrel so the effective
  * path is `/api/search`. Exported as `router` to match the barrel convention

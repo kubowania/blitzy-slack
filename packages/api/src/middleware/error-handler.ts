@@ -202,6 +202,9 @@ export const errorHandler: ErrorRequestHandler = (err, req, res, next): void => 
     const payload: ErrorPayload = {
       error: 'Unauthorized',
       message: err.message,
+      // Surface the typed classification (token_expired / token_invalid) when
+      // the verifier supplied one; omitted for generic 401s.
+      ...(err.code !== undefined ? { code: err.code } : {}),
     };
     log.warn({ err }, 'Unauthorized request');
     res.status(401).json(payload);

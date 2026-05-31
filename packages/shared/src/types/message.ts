@@ -154,3 +154,20 @@ export interface Thread {
   /** Ordered (oldest-first) list of reply messages. */
   replies: MessageWithAuthor[];
 }
+
+/**
+ * Response body for `GET /api/search`: the matched messages plus an echo of
+ * the validated query so the client can render the results header without
+ * re-reading the URL. The shape is identical regardless of hit count
+ * (`results` is `[]` when nothing matched).
+ *
+ * Declared here (rather than locally in the API route or the web component) so
+ * the server response type and the client query generic resolve to the SAME
+ * contract, per the single-source-of-truth convention (AAP §0.8.4).
+ */
+export interface SearchResponse {
+  /** Matched messages, most relevant first; `[]` when nothing matched. */
+  results: MessageWithAuthor[];
+  /** Echo of the validated, trimmed query string. */
+  query: string;
+}

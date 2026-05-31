@@ -11,7 +11,9 @@
  *   /api/files[/:id]
  *   /api/health
  *   /api/messages[/:id/{replies,reactions[,:emoji]}]
+ *   /api/presence
  *   /api/search
+ *   /api/users
  *
  * This file MUST NOT define route handlers itself — it is a pure composer.
  * Mounting order is alphabetical for readability (paths are exact, not
@@ -28,7 +30,9 @@ import { router as dmsRouter } from './dms.js';
 import { router as filesRouter } from './files.js';
 import { router as healthRouter } from './health.js';
 import { router as messagesRouter } from './messages.js';
+import { router as presenceRouter } from './presence.js';
 import { router as searchRouter } from './search.js';
+import { router as usersRouter } from './users.js';
 
 /**
  * Top-level `/api` router. `app.ts` imports this exact symbol via
@@ -44,4 +48,6 @@ router.use('/dms', dmsRouter);
 router.use('/files', filesRouter);
 router.use('/health', healthRouter);
 router.use('/messages', messagesRouter);
+router.use('/presence', presenceRouter);
 router.use('/search', searchRouter);
+router.use('/users', usersRouter);

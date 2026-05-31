@@ -11,9 +11,11 @@
  *      `IntersectionObserver` mounted at the TOP (older end) of the message
  *      list; when the sentinel approaches the viewport the hook loads the next
  *      older page.
- *   3. Real-time updates — a `message:new` Socket.io subscription prepends
- *      in-scope messages directly into the TanStack cache via `setQueryData`,
- *      so the timeline re-renders without an HTTP refetch.
+ *   3. Real-time updates — Socket.io subscriptions mutate the TanStack cache
+ *      via `setQueryData` so the timeline re-renders without an HTTP refetch:
+ *        - `message:new` prepends in-scope top-level messages into the first page.
+ *        - `reaction:added` / `reaction:removed` patch the `reactions` array of
+ *          the affected message wherever it lives across the loaded pages.
  *
  * Consumed by the channel and direct-message pages. Returns a flattened
  * `messages` array (newest first), pagination state, an error, and the sentinel
@@ -23,7 +25,7 @@ import { useInfiniteQuery, useQueryClient, type InfiniteData } from '@tanstack/r
 import { useCallback, useEffect, useRef } from 'react';
 
 import { PAGE_SIZE } from '@app/shared/constants/limits';
-import type { MessageWithAuthor } from '@app/shared/types/message';
+import type { MessageWithAuthor, ReactionSummary } from '@app/shared/types/message';
 
 import { apiClient } from '@/lib/api-client';
 import { useAuthStore } from '@/stores/auth.store';
@@ -90,6 +92,14 @@ export interface UseMessagesResult {
  * into the first page. Thread replies and messages for other conversations are
  * ignored.
  *
+ * The `reaction:added` / `reaction:removed` subscriptions patch the `reactions`
+ * array of the affected message in place, searching every loaded page by id.
+ * Because the reaction events carry only a `messageId` (no scope), each mounted
+ * `useMessages` instance updates its cache ONLY when it actually contains the
+ * message; events for messages in other conversations (or thread replies, which
+ * never appear in this timeline) are no-ops. `hasCurrentUser` is recomputed
+ * against the local viewer's id rather than trusting the broadcast payload.
+ *
  * @param options - The channel or DM whose timeline to load.
  * @returns The flattened messages, pagination state, error, and sentinel ref.
  */
@@ -97,6 +107,11 @@ export function useMessages(options: UseMessagesOptions): UseMessagesResult {
   const { channelId, dmId } = options;
   const queryClient = useQueryClient();
   const token = useAuthStore((s) => s.token);
+  // The local viewer's id. Reaction broadcasts carry a `ReactionSummary` whose
+  // `hasCurrentUser` reflects the REACTOR, not this viewer, so the cache update
+  // recomputes `hasCurrentUser` against this id from the authoritative
+  // `userIds` list.
+  const currentUserId = useAuthStore((s) => s.user?.id ?? null);
 
   const scopeKey =
     channelId !== undefined ? `channel:${channelId}` : dmId !== undefined ? `dm:${dmId}` : null;
@@ -166,6 +181,86 @@ export function useMessages(options: UseMessagesOptions): UseMessagesResult {
           pages: [updatedFirstPage, ...restPages],
         };
       },
+    );
+  });
+
+  /**
+   * Patches the `reactions` array of a single message within the page-aware
+   * infinite-query cache. Maps over every loaded page and applies `mutate` to
+   * the matching message's reactions; returns the cache unchanged when the
+   * message is not present in this timeline (the reaction belongs to another
+   * conversation or a thread reply this hook does not render).
+   *
+   * Implemented with `map`/`some` (no indexed access) so it is sound under
+   * `noUncheckedIndexedAccess`.
+   */
+  const updateMessageReactions = (
+    messageId: string,
+    mutate: (reactions: ReactionSummary[]) => ReactionSummary[],
+  ): void => {
+    queryClient.setQueryData<InfiniteData<MessagesPage>>(
+      queryKey,
+      (current): InfiniteData<MessagesPage> | undefined => {
+        if (current === undefined) {
+          return current;
+        }
+        let didChange = false;
+        const pages = current.pages.map((page): MessagesPage => {
+          if (!page.messages.some((m) => m.id === messageId)) {
+            return page;
+          }
+          didChange = true;
+          return {
+            ...page,
+            messages: page.messages.map((m) =>
+              m.id === messageId ? { ...m, reactions: mutate(m.reactions) } : m,
+            ),
+          };
+        });
+        if (!didChange) {
+          return current;
+        }
+        return { ...current, pages };
+      },
+    );
+  };
+
+  useSocketEvent('reaction:added', ({ messageId, reaction }): void => {
+    updateMessageReactions(messageId, (reactions) => {
+      // Recompute `hasCurrentUser` for THIS viewer from the authoritative
+      // `userIds`; the broadcast payload's flag reflects the reactor.
+      const normalized: ReactionSummary = {
+        ...reaction,
+        hasCurrentUser: currentUserId !== null && reaction.userIds.includes(currentUserId),
+      };
+      if (!reactions.some((r) => r.emoji === normalized.emoji)) {
+        return [...reactions, normalized];
+      }
+      return reactions.map((r) => (r.emoji === normalized.emoji ? normalized : r));
+    });
+  });
+
+  useSocketEvent('reaction:removed', ({ messageId, emoji, userId }): void => {
+    updateMessageReactions(messageId, (reactions) =>
+      // Drop `userId` from the matching chip; remove the chip entirely once its
+      // last reactor leaves. `flatMap` returning `[]` deletes; `[entry]` keeps.
+      reactions.flatMap((r): ReactionSummary[] => {
+        if (r.emoji !== emoji) {
+          return [r];
+        }
+        const nextUserIds = r.userIds.filter((id) => id !== userId);
+        if (nextUserIds.length === 0) {
+          return [];
+        }
+        return [
+          {
+            ...r,
+            userIds: nextUserIds,
+            count: nextUserIds.length,
+            hasCurrentUser: currentUserId !== null && nextUserIds.includes(currentUserId),
+          },
+        ];
+      }),
     );
   });
 

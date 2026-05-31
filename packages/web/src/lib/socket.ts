@@ -65,7 +65,10 @@ export function getSocket(): AppSocket {
     reconnectionAttempts: Infinity,
     reconnectionDelay: 1000,
     reconnectionDelayMax: 5000,
-    transports: ['websocket', 'polling'],
+    // Rule 2 — WebSocket transport only; HTTP long-polling is forbidden. Pinned
+    // to match the server (packages/api/src/index.ts), so no polling handshake
+    // is ever attempted.
+    transports: ['websocket'],
   });
 
   return socket;

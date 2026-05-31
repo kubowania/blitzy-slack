@@ -337,6 +337,26 @@ export async function listDms(userId: string): Promise<DMWithParticipants[]> {
 }
 
 /**
+ * List the ids of every direct-message conversation the user participates in.
+ *
+ * A lean projection of {@link listDms} (no participant or last-message
+ * hydration) used by the Socket.io connection handler to auto-join the user's
+ * `dm:<id>` rooms and by presence fan-out to reach DM partners. The result is
+ * capped at `MAX_PAGE_SIZE` so it can never grow unbounded at PoC scale.
+ *
+ * @param userId - the user whose DM conversations to resolve.
+ * @returns the DM ids the user participates in.
+ */
+export async function listDmIds(userId: string): Promise<string[]> {
+  const dms = await prisma.directMessage.findMany({
+    where: { participants: { some: { userId } } },
+    select: { id: true },
+    take: MAX_PAGE_SIZE,
+  });
+  return dms.map((dm) => dm.id);
+}
+
+/**
  * Create or find the 1:1 direct-message conversation between two users.
  *
  * Idempotency is anchored on the canonical (lower-id, higher-id) participant

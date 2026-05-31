@@ -54,12 +54,13 @@ router.post(
     // success (Rule 4) — so this handler deliberately does NOT catch it.
     const result = await registerUser(req.body);
 
+    // Gate 10 structured log: identity only. The email address is PII and MUST
+    // NOT be logged (security checklist) — `userId` is the durable correlator.
     req.log.info(
       {
         component: 'auth.route',
         event: 'register',
         userId: result.user.id,
-        email: result.user.email,
       },
       'user registered',
     );
@@ -76,8 +77,9 @@ router.post(
     // throws a uniform UnauthorizedError → the error handler returns 401.
     const result = await loginUser(req.body);
 
+    // Gate 10 structured log: identity only — never the email (PII).
     req.log.info(
-      { component: 'auth.route', event: 'login', userId: result.user.id, email: result.user.email },
+      { component: 'auth.route', event: 'login', userId: result.user.id },
       'user logged in',
     );
 

@@ -20,7 +20,7 @@ import { cn } from '@/lib/utils';
 
 import { SearchResultItem } from '@/components/search/SearchResultItem';
 
-import type { MessageWithAuthor } from '@app/shared/types/message';
+import type { MessageWithAuthor, SearchResponse } from '@app/shared/types/message';
 
 export interface SearchResultsListProps {
   className?: string;
@@ -33,12 +33,14 @@ export function SearchResultsList({ className }: SearchResultsListProps) {
 
   const { data, isLoading, isError, error } = useQuery({
     queryKey: ['search', query],
-    queryFn: () => apiClient.get<MessageWithAuthor[]>(`/api/search?q=${encodeURIComponent(query)}`),
+    // The backend wraps results in `{ results, query }` (see
+    // packages/api/src/routes/search.ts); the array lives under `results`.
+    queryFn: () => apiClient.get<SearchResponse>(`/api/search?q=${encodeURIComponent(query)}`),
     enabled: query.length > 0,
     staleTime: 30_000,
   });
 
-  const messages = React.useMemo<MessageWithAuthor[]>(() => data ?? [], [data]);
+  const messages = React.useMemo<MessageWithAuthor[]>(() => data?.results ?? [], [data]);
   const fileMessages = React.useMemo<MessageWithAuthor[]>(
     () => messages.filter((message) => message.file !== null),
     [messages],

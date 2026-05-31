@@ -46,12 +46,20 @@ export abstract class ServiceError extends Error {
 
 /**
  * 401 Unauthorized — the request lacks valid authentication.
+ *
+ * Carries an optional machine-readable `code` (e.g. `'token_expired'`,
+ * `'token_invalid'`) that the error-handler surfaces in the JSON payload so
+ * clients can distinguish an expired session (refresh/re-login) from a
+ * malformed/tampered token. The code is omitted for generic 401s (missing
+ * header, bad credentials) where no finer classification applies.
  */
 export class UnauthorizedError extends ServiceError {
   public readonly statusCode = 401;
+  public readonly code?: string;
 
-  public constructor(message = 'Unauthorized') {
+  public constructor(message = 'Unauthorized', code?: string) {
     super(message);
+    this.code = code;
   }
 }
 

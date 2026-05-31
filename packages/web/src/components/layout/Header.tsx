@@ -31,7 +31,10 @@ interface HeaderRouteParams extends Record<string, string | undefined> {
  *   route falls back to the product name.
  * - Center: the shared {@link SearchBar}, the single search entry point.
  * - Right: `Help` and `Members` ghost icon buttons, each wrapped in a `Tooltip`.
- *   Both tooltips share one `TooltipProvider` for hover-delay management.
+ *   Both tooltips share one `TooltipProvider` for hover-delay management. These
+ *   two features are out of scope for this proof-of-concept, so the buttons are
+ *   rendered `disabled` (rather than appearing interactive but doing nothing);
+ *   their unavailability is conveyed via the tooltip and `aria-label`.
  *
  * Standard `<header>` attributes (including `className`) are forwarded so a
  * consumer can override layout; the app shell renders it without extra props.
@@ -87,19 +90,31 @@ export function Header({ className, ...props }: React.ComponentProps<'header'>) 
         <TooltipProvider delayDuration={200}>
           <Tooltip>
             <TooltipTrigger asChild>
-              <Button type="button" variant="ghost" size="icon" aria-label="Help">
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon"
+                aria-label="Help (coming soon)"
+                disabled
+              >
                 <HelpCircle className="size-4" aria-hidden="true" />
               </Button>
             </TooltipTrigger>
-            <TooltipContent side="bottom">Help</TooltipContent>
+            <TooltipContent side="bottom">Help (coming soon)</TooltipContent>
           </Tooltip>
           <Tooltip>
             <TooltipTrigger asChild>
-              <Button type="button" variant="ghost" size="icon" aria-label="Members">
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon"
+                aria-label="Members (coming soon)"
+                disabled
+              >
                 <Users className="size-4" aria-hidden="true" />
               </Button>
             </TooltipTrigger>
-            <TooltipContent side="bottom">Members</TooltipContent>
+            <TooltipContent side="bottom">Members (coming soon)</TooltipContent>
           </Tooltip>
         </TooltipProvider>
       </div>

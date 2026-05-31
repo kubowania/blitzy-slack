@@ -58,6 +58,43 @@ export const sendMessageSchema = z
 export type SendMessageInput = z.infer<typeof sendMessageSchema>;
 
 /**
+ * Validates the scope of a `typing:start` / `typing:stop` realtime event.
+ *
+ * A typing indicator targets EXACTLY ONE conversation — either a channel
+ * (`channelId` set) or a direct message (`dmId` set) — mirroring the
+ * channel/DM XOR invariant of {@link sendMessageSchema}. The server validates
+ * the inbound socket payload against this schema before enforcing the room ACL
+ * and broadcasting the indicator to the other participants. There is no
+ * `content` here: a typing indicator is pure scope plus the typist's identity
+ * (which the server derives from the authenticated `socket.data`, never from
+ * the wire, so it cannot be spoofed).
+ *
+ * `.strict()` rejects unknown keys.
+ */
+export const typingScopeSchema = z
+  .object({
+    channelId: z.string().cuid().optional(),
+    dmId: z.string().cuid().optional(),
+  })
+  .strict()
+  .superRefine((data, ctx) => {
+    const hasChannel = Boolean(data.channelId);
+    const hasDm = Boolean(data.dmId);
+    if (hasChannel === hasDm) {
+      const message = hasChannel
+        ? 'Provide either channelId or dmId, not both'
+        : 'Either channelId or dmId is required';
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message, path: ['channelId'] });
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message, path: ['dmId'] });
+    }
+  });
+
+/**
+ * Inferred TypeScript type for the validated typing-scope payload.
+ */
+export type TypingScopeInput = z.infer<typeof typingScopeSchema>;
+
+/**
  * Code points permitted inside an emoji reaction: the Emoji property plus
  * variation selector-16 (U+FE0F), the keycap combiner (U+20E3), the zero-width
  * joiner (U+200D), and the tag characters (U+E0020–U+E007F) used by

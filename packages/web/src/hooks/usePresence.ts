@@ -14,6 +14,9 @@
  *     resuming (with an immediate beat) on `→ visible`.
  *   - `usePresenceSubscription()` — single global `presence:update → store`
  *     wiring that fans server broadcasts out to every selector.
+ *   - `useHydratePresence(userIds)` — one-shot initial fetch of the presence
+ *     map for a set of visible users (`GET /api/presence?userIds=`), seeding the
+ *     store BEFORE any live broadcast arrives so dots are correct on first paint.
  *   - `useInitPresence()` — composite that mounts the subscription and the
  *     heartbeat together; the recommended entry point for the workspace shell.
  *
@@ -24,12 +27,14 @@
  * is recorded in /docs/decision-log.md, not in these comments.
  */
 import { useCallback, useEffect } from 'react';
+import { useQuery } from '@tanstack/react-query';
 
 import { HEARTBEAT_INTERVAL_MS } from '@app/shared/constants/limits';
 import type { PresenceState } from '@app/shared/types/presence';
 
+import { apiClient } from '@/lib/api-client';
 import { useAuthStore } from '@/stores/auth.store';
-import { usePresenceStore } from '@/stores/presence.store';
+import { usePresenceStore, type PresenceEntry } from '@/stores/presence.store';
 
 import { useSocket, useSocketEvent } from './useSocket';
 
@@ -136,6 +141,48 @@ export function usePresenceSubscription(): void {
 
   useSocketEvent('presence:update', (update) => {
     setPresence(update.userId, update.state);
+  });
+}
+
+/**
+ * One-shot presence-map hydration for a set of users. Mount where a list of
+ * users becomes visible (e.g. the sidebar member/DM lists) so their presence
+ * dots are correct on first paint, closing the gap before the server's
+ * transition broadcasts arrive.
+ *
+ * Fetches `GET /api/presence?userIds=<csv>` and seeds the store via
+ * `setBulkPresence`. The query is keyed on the ORDER-INDEPENDENT set of ids, so
+ * it refetches only when the membership of the set actually changes — not when
+ * the caller passes a new array reference with the same contents. Disabled
+ * while logged out (`token === null`) or when the set is empty. Every returned
+ * id (including those with no live heartbeat → `offline`) is written, so the
+ * store reflects an authoritative snapshot rather than defaulting unknowns.
+ *
+ * @param userIds - database ids of the users whose presence to hydrate.
+ */
+export function useHydratePresence(userIds: readonly string[]): void {
+  const token = useAuthStore((s) => s.token);
+  const setBulkPresence = usePresenceStore((s) => s.setBulkPresence);
+
+  // Order-independent, value-stable key: re-sorting an array of the same ids
+  // yields the same string, so the query does not refetch on a mere reference
+  // change. Cheap for the modest id counts a sidebar renders.
+  const idsKey = [...userIds].sort().join(',');
+
+  useQuery({
+    queryKey: ['presence', 'hydrate', idsKey],
+    enabled: token !== null && idsKey.length > 0,
+    queryFn: async (): Promise<Record<string, PresenceState>> => {
+      const map = await apiClient.get<Record<string, PresenceState>>(
+        `/api/presence?userIds=${encodeURIComponent(idsKey)}`,
+      );
+      const entries: PresenceEntry[] = Object.entries(map).map(([userId, state]) => ({
+        userId,
+        state,
+      }));
+      setBulkPresence(entries);
+      return map;
+    },
   });
 }
 

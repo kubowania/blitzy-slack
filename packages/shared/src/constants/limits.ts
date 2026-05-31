@@ -79,3 +79,15 @@ export const MAX_SEARCH_QUERY_LENGTH = 200 as const;
 // ---------------------------------------------------------------------------
 /** Maximum length of a reaction emoji string in characters. */
 export const MAX_EMOJI_LENGTH = 64 as const;
+
+// ---------------------------------------------------------------------------
+// User search (start-DM people picker)
+// ---------------------------------------------------------------------------
+/** Maximum number of users returned by `GET /api/users?q=` in a single page. */
+export const MAX_USER_SEARCH_RESULTS = 20 as const;
+
+// ---------------------------------------------------------------------------
+// Presence hydration
+// ---------------------------------------------------------------------------
+/** Maximum number of user ids accepted by `GET /api/presence?userIds=` per call. */
+export const MAX_PRESENCE_QUERY_IDS = 200 as const;

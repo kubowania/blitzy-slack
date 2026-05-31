@@ -3,6 +3,7 @@ import { useMutation, useQueryClient } from '@tanstack/react-query';
 
 import type { ReactionSummary } from '@app/shared/types/message';
 
+import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
 import { apiClient, type ApiError } from '@/lib/api-client';
 
@@ -121,8 +122,13 @@ export function ReactionChip({
       : `${reaction.emoji} reaction (${optimisticCount} people)`;
 
   return (
-    <button
+    // Composed from the shadcn `Button` primitive (variant="ghost") with pill
+    // classes so the chip inherits the design-system focus-visible ring,
+    // transition, and disabled treatment instead of a raw <button>.
+    <Button
       type="button"
+      variant="ghost"
+      size="sm"
       onClick={handleClick}
       disabled={mutation.isPending}
       aria-pressed={isActive}
@@ -131,15 +137,10 @@ export function ReactionChip({
       data-slot="reaction-chip"
       data-active={isActive}
       className={cn(
-        'rounded-full px-2 py-0.5 text-xs h-6',
-        'inline-flex items-center gap-1',
-        'transition-colors',
-        'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
-        'border',
+        'h-6 gap-1 rounded-full border px-2 py-0.5 text-xs',
         isActive
-          ? 'bg-primary/10 border-primary text-primary hover:bg-primary/15'
-          : 'bg-muted border-transparent text-foreground hover:bg-muted/80',
-        mutation.isPending && 'opacity-60 cursor-wait',
+          ? 'border-primary bg-primary/10 text-primary hover:bg-primary/15'
+          : 'border-transparent bg-muted text-foreground hover:bg-muted/80',
         className,
       )}
     >
@@ -147,6 +148,6 @@ export function ReactionChip({
           from `aria-label`, which also carries the reactor count. */}
       <span aria-hidden="true">{reaction.emoji}</span>
       <span className="font-medium tabular-nums">{optimisticCount}</span>
-    </button>
+    </Button>
   );
 }

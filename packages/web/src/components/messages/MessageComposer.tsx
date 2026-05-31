@@ -20,7 +20,8 @@
  *
  * Form state is owned by react-hook-form with `zodResolver(sendMessageSchema)`,
  * so the client enforces exactly the rules the API validates (Gate 12). On
- * submit the composer POSTs to the channel / DM / thread endpoint; the server
+ * submit the composer POSTs to the single `/api/messages` endpoint with the
+ * scope (channelId / dmId / parentId) carried in the request body; the server
  * then emits a `message:new` Socket.io event that the message-list cache
  * subscriber applies, so the new message appears in the timeline without a
  * manual cache write (Rule 2 — real-time fan-out, never polling). Typing
@@ -145,14 +146,12 @@ export function MessageComposer({
 
   const sendMutation = useMutation<MessageWithAuthor, ApiError, SendMessageInput>({
     mutationFn: async (payload: SendMessageInput): Promise<MessageWithAuthor> => {
-      const endpoint = buildSendEndpoint({
-        channelId: payload.channelId,
-        dmId: payload.dmId,
-        parentMessageId,
-      });
-      // The canonical body is sent verbatim; the server reads the scope from
-      // the URL path and ignores any duplicate scope keys in the body.
-      return apiClient.post<MessageWithAuthor>(endpoint, payload);
+      // Single canonical write endpoint. The API exposes only POST /api/messages
+      // (there are no /api/channels/:id/messages, /api/dms/:id/messages, or
+      // /api/messages/:id/replies write routes). The server derives the scope
+      // from the BODY's channelId / dmId / parentId, which the form's
+      // defaultValues already populate, so the validated payload is sent verbatim.
+      return apiClient.post<MessageWithAuthor>('/api/messages', payload);
     },
     onError: (error: ApiError) => {
       toast.error('Failed to send message', { description: error.message });
@@ -361,34 +360,6 @@ export function MessageComposer({
       </form>
     </div>
   );
-}
-
-/**
- * Arguments accepted by {@link buildSendEndpoint}.
- */
-interface BuildEndpointArgs {
-  channelId?: string;
-  dmId?: string;
-  parentMessageId?: string;
-}
-
-/**
- * Resolves the REST endpoint a message is POSTed to from the active scope.
- * Thread replies take precedence over the channel/DM endpoints. The caller is
- * contractually required to provide one of the three scopes; the final throw
- * is a defensive runtime guard that should be unreachable in practice.
- */
-function buildSendEndpoint({ channelId, dmId, parentMessageId }: BuildEndpointArgs): string {
-  if (parentMessageId !== undefined) {
-    return `/api/messages/${parentMessageId}/replies`;
-  }
-  if (channelId !== undefined) {
-    return `/api/channels/${channelId}/messages`;
-  }
-  if (dmId !== undefined) {
-    return `/api/dms/${dmId}/messages`;
-  }
-  throw new Error('MessageComposer: requires channelId, dmId, or parentMessageId');
 }
 
 /**

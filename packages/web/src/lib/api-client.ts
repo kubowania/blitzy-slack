@@ -1,5 +1,6 @@
 import type { ZodType } from 'zod';
 
+import { performLogout } from '@/lib/session';
 import { useAuthStore } from '@/stores/auth.store';
 
 /**
@@ -125,9 +126,10 @@ function extractErrorMessage(body: unknown, fallback: string): string {
  *      auth store.
  *   3. Merges caller-provided headers AFTER the defaults so callers may
  *      override (e.g., a custom `Accept` for downloads).
- *   4. On a 401 response, invalidates the auth store (`logout()`) before
- *      throwing so the UI redirects to `/login` and the WebSocket
- *      singleton disconnects.
+ *   4. On a 401 response, runs the shared `performLogout()` teardown
+ *      (clears the auth store, disconnects the WebSocket singleton, and
+ *      clears the presence map) before throwing, so the UI redirects to
+ *      `/login` with no stale socket or presence state.
  *   5. On a non-2xx response, throws `ApiError(message, status, body)`.
  *   6. On a 2xx response with an empty body, returns `undefined as T`.
  *   7. On a 2xx response with a body and a `schema` option, validates
@@ -173,7 +175,12 @@ async function request<T>(
   }
 
   if (response.status === 401) {
-    useAuthStore.getState().logout();
+    // Session expired or token rejected: run the FULL teardown (clear auth
+    // store + disconnect the WebSocket + clear presence) via the shared
+    // orchestrator, not just the store logout — otherwise the socket would stay
+    // connected on a dead identity. The UI redirects to /login off the cleared
+    // auth state.
+    performLogout();
     const errBody = await parseBody(response);
     throw new ApiError(extractErrorMessage(errBody, 'Unauthorized'), 401, errBody);
   }

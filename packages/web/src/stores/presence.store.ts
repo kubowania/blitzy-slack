@@ -1,6 +1,18 @@
 import { create } from 'zustand';
 
-import type { PresenceState, PresenceUpdate } from '@app/shared/types/presence';
+import type { PresenceState } from '@app/shared/types/presence';
+
+/**
+ * Minimal entry accepted by {@link PresenceStoreState.setBulkPresence}. Only
+ * `userId` and `state` are required, so BOTH a live `PresenceUpdate` (from a
+ * `presence:update` socket event, which also carries `lastSeenAt`) AND a
+ * hydration record derived from `GET /api/presence` (which carries only the
+ * bucket) can seed the map without fabricating fields.
+ */
+export interface PresenceEntry {
+  userId: string;
+  state: PresenceState;
+}
 
 /**
  * Shape of the Zustand presence store.
@@ -16,7 +28,7 @@ export interface PresenceStoreState {
   /** Set the presence state for a single user. */
   setPresence: (userId: string, state: PresenceState) => void;
   /** Apply a batch of presence updates in a single state transition. */
-  setBulkPresence: (entries: PresenceUpdate[]) => void;
+  setBulkPresence: (entries: readonly PresenceEntry[]) => void;
   /** Read the presence state for a user; returns `'offline'` for unknown users. */
   getPresence: (userId: string) => PresenceState;
   /** Reset the presence map to empty (used on logout and on socket reconnect). */

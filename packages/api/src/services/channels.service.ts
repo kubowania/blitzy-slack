@@ -313,6 +313,29 @@ export async function listChannels(userId: string): Promise<ChannelSummary[]> {
 }
 
 /**
+ * List the ids of every channel the user is an actual MEMBER of (a
+ * `ChannelMember` row exists), regardless of the channel's privacy.
+ *
+ * This differs from {@link listChannels}, which also returns public channels
+ * the user has NOT joined: room subscription and presence fan-out must target
+ * only the rooms whose membership the caller can post to / read from (matching
+ * the `assertChannelAccess` membership rule), so this lean query reads the
+ * membership join table directly and returns just the channel ids.
+ *
+ * @param userId - the user whose channel memberships to resolve.
+ * @returns the channel ids the user belongs to (unbounded by privacy, capped
+ *          at `MAX_PAGE_SIZE` so the result can never grow without limit).
+ */
+export async function listMemberChannelIds(userId: string): Promise<string[]> {
+  const memberships = await prisma.channelMember.findMany({
+    where: { userId },
+    select: { channelId: true },
+    take: MAX_PAGE_SIZE,
+  });
+  return memberships.map((membership) => membership.channelId);
+}
+
+/**
  * Create a channel and make the creator its `owner` in a single transaction so
  * the two writes commit together: the `Channel` row and the creator's
  * `ChannelMember` row with `role: 'owner'` (overriding the schema's `'member'`

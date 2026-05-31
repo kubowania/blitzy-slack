@@ -83,15 +83,16 @@ router.post(
       uploadedById,
     });
 
-    // Gate 10 structured log: identity + persisted metadata; the disk path is
-    // never logged here (it is internal to the service).
+    // Gate 10 structured log: identity + non-PII persisted metadata. The
+    // user-supplied originalName can embed personal/project information, so it
+    // is deliberately omitted (privacy); fileId is the durable correlator and
+    // the disk path is internal to the service.
     req.log.info(
       {
         component: 'files.route',
         event: 'upload',
         userId: uploadedById,
         fileId: file.id,
-        originalName: file.originalName,
         sizeBytes: file.sizeBytes,
         mimeType: file.mimeType,
       },

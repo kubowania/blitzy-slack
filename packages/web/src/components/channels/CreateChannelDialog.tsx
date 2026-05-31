@@ -2,13 +2,12 @@ import * as React from 'react';
 import { useNavigate } from 'react-router';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
-import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
 
 import { createChannelSchema, type CreateChannelInput } from '@app/shared/schemas/channel';
-import type { ChannelWithMembers } from '@app/shared/types/channel';
 
 import { Button } from '@/components/ui/button';
+import { Checkbox } from '@/components/ui/checkbox';
 import {
   Dialog,
   DialogContent,
@@ -29,8 +28,7 @@ import {
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
-import { apiClient } from '@/lib/api-client';
-import { cn } from '@/lib/utils';
+import { useCreateChannel } from '@/hooks/useChannels';
 
 /**
  * Props for {@link CreateChannelDialog}.
@@ -47,7 +45,7 @@ export interface CreateChannelDialogProps {
 }
 
 /**
- * Stable DOM id shared between the native `isPrivate` checkbox and its
+ * Stable DOM id shared between the `isPrivate` {@link Checkbox} and its
  * associated {@link Label} so that clicking the label toggles the checkbox.
  */
 const IS_PRIVATE_FIELD_ID = 'create-channel-isPrivate';
@@ -63,19 +61,20 @@ const IS_PRIVATE_FIELD_ID = 'create-channel-isPrivate';
  * Fields:
  *  - `name`        — required; lowercase letters, digits, hyphen, underscore.
  *  - `description` — optional; up to 250 characters.
- *  - `isPrivate`   — boolean toggle rendered as a styled native checkbox.
+ *  - `isPrivate`   — boolean toggle rendered with the shadcn `Checkbox` primitive.
  *
- * On submit it POSTs `/api/channels` through {@link apiClient}. On success it
- * invalidates the cached `['channels']` list so the sidebar refetches, shows a
- * confirmation toast, resets the form, closes the dialog, and navigates to the
- * newly created channel. On failure it surfaces the error message via a toast.
+ * On submit it creates the channel through the canonical {@link useCreateChannel}
+ * mutation (which POSTs `/api/channels`, returning the base `Channel` DTO, and
+ * invalidates the cached `['channels']` list so the sidebar refetches). The
+ * dialog-specific side effects — confirmation toast, form reset, close, and
+ * navigation to the new channel — run in the per-call `onSuccess`; failures
+ * surface the error message via a toast.
  */
 export function CreateChannelDialog({
   open,
   onOpenChange,
 }: CreateChannelDialogProps): React.JSX.Element {
   const navigate = useNavigate();
-  const queryClient = useQueryClient();
   const nameInputRef = React.useRef<HTMLInputElement | null>(null);
 
   const form = useForm<CreateChannelInput>({
@@ -87,28 +86,11 @@ export function CreateChannelDialog({
     },
   });
 
-  const createChannelMutation = useMutation<ChannelWithMembers, Error, CreateChannelInput>({
-    mutationFn: (input) => {
-      const body: CreateChannelInput = {
-        name: input.name,
-        isPrivate: input.isPrivate,
-        ...(input.description !== undefined && input.description.length > 0
-          ? { description: input.description }
-          : {}),
-      };
-      return apiClient.post<ChannelWithMembers>('/api/channels', body);
-    },
-    onSuccess: (newChannel) => {
-      void queryClient.invalidateQueries({ queryKey: ['channels'] });
-      toast.success(`Channel #${newChannel.name} created`);
-      form.reset();
-      onOpenChange(false);
-      void navigate(`/app/channels/${newChannel.id}`);
-    },
-    onError: (err) => {
-      toast.error(err.message.length > 0 ? err.message : 'Failed to create channel');
-    },
-  });
+  // Canonical create mutation (typed to the base `Channel` DTO the backend
+  // actually returns, NOT `ChannelWithMembers`). The hook invalidates the
+  // `['channels']` list on success; the dialog adds its own UX side effects
+  // via the per-call callbacks below.
+  const createChannelMutation = useCreateChannel();
 
   React.useEffect(() => {
     if (open) {
@@ -123,7 +105,26 @@ export function CreateChannelDialog({
   }, [open]);
 
   const handleSubmit = form.handleSubmit((values) => {
-    createChannelMutation.mutate(values);
+    // Omit `description` entirely when blank so the backend stores `null`
+    // rather than an empty string.
+    const body: CreateChannelInput = {
+      name: values.name,
+      isPrivate: values.isPrivate,
+      ...(values.description !== undefined && values.description.length > 0
+        ? { description: values.description }
+        : {}),
+    };
+    createChannelMutation.mutate(body, {
+      onSuccess: (newChannel) => {
+        toast.success(`Channel #${newChannel.name} created`);
+        form.reset();
+        onOpenChange(false);
+        void navigate(`/app/channels/${newChannel.id}`);
+      },
+      onError: (err) => {
+        toast.error(err.message.length > 0 ? err.message : 'Failed to create channel');
+      },
+    });
   });
 
   const isSubmitting = createChannelMutation.isPending;
@@ -201,9 +202,8 @@ export function CreateChannelDialog({
                 <FormItem>
                   <div className="flex items-start gap-3 rounded-md border p-3">
                     <FormControl>
-                      <input
+                      <Checkbox
                         id={IS_PRIVATE_FIELD_ID}
-                        type="checkbox"
                         checked={field.value}
                         onChange={(event) => {
                           field.onChange(event.target.checked);
@@ -211,13 +211,7 @@ export function CreateChannelDialog({
                         onBlur={field.onBlur}
                         name={field.name}
                         ref={field.ref}
-                        className={cn(
-                          'mt-0.5 size-4 shrink-0 cursor-pointer rounded',
-                          'border border-input',
-                          'accent-primary',
-                          'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
-                          'disabled:cursor-not-allowed disabled:opacity-50',
-                        )}
+                        className="mt-0.5"
                       />
                     </FormControl>
                     <div className="flex-1">

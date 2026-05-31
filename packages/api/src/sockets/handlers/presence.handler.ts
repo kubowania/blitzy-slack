@@ -11,7 +11,9 @@
  *
  * Real-time contract (AAP §0.4.5):
  *   - Listens: `presence:heartbeat` (client -> server) — NO payload, NO ack
- *   - Emits:   `presence:update`    (server -> the user's own `user:<id>` room)
+ *   - Emits:   `presence:update`    (server -> every peer authorized to observe
+ *                                     the user: their member channels + DMs +
+ *                                     the user's own `user:<id>` room)
  *   - Emits:   `error`              (server -> originating socket, on failure)
  *
  * Presence semantics (AAP §0.8.4): `online` < 60 s since last heartbeat,
@@ -20,9 +22,11 @@
  * each heartbeat without rate-limiting and lets the Redis TTL drive the
  * away/offline buckets.
  *
- * Broadcasts are addressed to the user's own room via the `userRoom` helper
- * from `../rooms.js`; the Socket.io Redis adapter (AAP Rule 2) transparently
- * fans every emit out to that user's sockets connected to any API instance.
+ * Transition broadcasts are fanned out by `broadcastPresenceUpdate`
+ * (`../presence-broadcast.js`), which targets the user's authorized audience so
+ * peers' sidebars and DM lists reconcile — not just the user's own tabs. The
+ * Socket.io Redis adapter (AAP Rule 2) transparently fans every emit out to
+ * recipients connected to any API instance.
  *
  * Layering: this handler performs NO database, Redis, or JWT work directly. It
  * delegates presence tracking to `recordHeartbeat` and relies on the
@@ -40,7 +44,7 @@ import type { Server, Socket } from 'socket.io';
 import { recordHeartbeat } from '../../services/presence.service.js';
 import { ServiceError } from '../../middleware/errors.js';
 import { logger } from '../../config/logger.js';
-import { userRoom } from '../rooms.js';
+import { broadcastPresenceUpdate } from '../presence-broadcast.js';
 import { ERROR, PRESENCE_HEARTBEAT, PRESENCE_UPDATE } from '@app/shared/constants/events';
 import type {
   ClientToServerEvents,
@@ -66,8 +70,8 @@ type AppSocket = Socket<ClientToServerEvents, ServerToClientEvents, InterServerE
  * completion is never surfaced to the client (the `no-floating-promises` rule
  * is satisfied by the explicit `void`).
  *
- * @param io - The typed Socket.io server, used to broadcast `presence:update`
- *   to the heart-beating user's own `user:<id>` room on a transition.
+ * @param io - The typed Socket.io server, used to fan `presence:update` out to
+ *   the heart-beating user's authorized audience on a transition.
  * @param socket - The connecting socket whose heartbeat events are handled;
  *   provides `socket.data.userId` and `socket.id`.
  */
@@ -86,9 +90,9 @@ export function registerPresenceHandlers(io: AppServer, socket: AppSocket): void
  *      TTL and returns the `{ previousState, currentState, lastSeenAt }` tuple
  *      (`currentState` is always `online` immediately after a heartbeat).
  *   2. When `previousState !== currentState` the user just transitioned (e.g.,
- *      `offline -> online` after a reconnect): broadcast `presence:update` to
- *      the user's own `user:<id>` room so their other tabs reconcile, and log
- *      the transition at `info`.
+ *      `offline -> online` after a reconnect): fan `presence:update` out to the
+ *      user's authorized audience (member channels + DMs + own room) via
+ *      `broadcastPresenceUpdate`, and log the transition at `info`.
  *   3. Otherwise the user was already `online` and only the TTL was refreshed:
  *      log at `debug` (suppressed in production where the level is `info`) so
  *      heartbeat arrival stays observable in development without flooding prod.
@@ -116,7 +120,10 @@ async function handleHeartbeat(io: AppServer, socket: AppSocket): Promise<void> 
         lastSeenAt: result.lastSeenAt,
       };
 
-      io.to(userRoom(userId)).emit(PRESENCE_UPDATE, update);
+      // Fan the transition out to every peer authorized to observe this user
+      // (their member channels + DMs) AND the user's own tabs, so sidebars and
+      // DM lists everywhere reconcile — not just the user's own room.
+      await broadcastPresenceUpdate(io, userId, update);
 
       logger.info(
         {

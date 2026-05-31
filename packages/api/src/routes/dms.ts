@@ -25,17 +25,31 @@
 import type {} from 'pino-http';
 
 import { Router, type Request, type Response } from 'express';
+import type { Server } from 'socket.io';
 import { z } from 'zod';
 
 import { startDmSchema } from '@app/shared/schemas/dm';
 import type { StartDmInput } from '@app/shared/schemas/dm';
 import type { DMWithParticipants } from '@app/shared/types/dm';
 import type { MessageWithAuthor } from '@app/shared/types/message';
+import type {
+  ClientToServerEvents,
+  InterServerEvents,
+  ServerToClientEvents,
+  SocketData,
+} from '@app/shared/types/socket-events';
 import { MAX_PAGE_SIZE, PAGE_SIZE } from '@app/shared/constants/limits';
 
 import { requireAuth } from '../middleware/auth.js';
 import { validate } from '../middleware/validate.js';
 import { listDms, startDm, listDmMessages } from '../services/dms.service.js';
+import { dmRoom, userRoom } from '../sockets/rooms.js';
+
+/**
+ * Fully-typed Socket.io server alias. Narrowing `req.app.get('io')` to this type
+ * keeps the `socketsJoin` call below checked against the shared event contract.
+ */
+type AppServer = Server<ClientToServerEvents, ServerToClientEvents, InterServerEvents, SocketData>;
 
 /**
  * Paginated DM message-history payload returned by `GET /:id/messages`: one
@@ -100,6 +114,20 @@ router.post(
     // pair is returned, otherwise a new one is created. Self-DMs and unknown
     // targets are rejected inside the service.
     const dm = await startDm({ initiatorId, otherUserId });
+
+    // Subscribe BOTH participants' already-connected sockets to the DM's room so
+    // realtime messages flow immediately, even when the DM was just created
+    // mid-session (the connect-time auto-join only covers DMs that existed at
+    // connect). `io.in(user:<id>).socketsJoin(dm:<id>)` works across the Redis
+    // adapter so it reaches sockets on any API instance. Both participant ids
+    // are read from the hydrated DTO.
+    const io = req.app.get('io') as AppServer | undefined;
+    if (io !== undefined) {
+      const dmRoomKey = dmRoom(dm.id);
+      for (const participant of dm.participants) {
+        io.in(userRoom(participant.id)).socketsJoin(dmRoomKey);
+      }
+    }
 
     req.log.info(
       { component: 'dms.route', event: 'create', initiatorId, otherUserId, dmId: dm.id },

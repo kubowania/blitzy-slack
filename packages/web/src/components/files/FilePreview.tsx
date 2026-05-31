@@ -89,7 +89,10 @@ export function FilePreview({ file, className }: FilePreviewProps) {
               onClick={() => {
                 setLightboxOpen(true);
               }}
-              className="block w-full text-left"
+              className={cn(
+                'block w-full rounded-md text-left',
+                'outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2',
+              )}
               aria-label={`Open ${file.originalName} at full size`}
             >
               <div className="relative">

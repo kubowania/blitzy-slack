@@ -121,24 +121,25 @@ export function ReactionPicker({
   return (
     <EmojiPicker
       trigger={
-        <button
+        // Composed from the shadcn `Button` primitive (variant="ghost") with
+        // pill classes, matching the icon variant above and ReactionChip,
+        // rather than a raw <button>.
+        <Button
           type="button"
+          variant="ghost"
+          size="sm"
           disabled={mutation.isPending}
           aria-label="Add reaction"
           data-slot="reaction-picker-trigger"
           className={cn(
-            'rounded-full px-2 py-0.5 text-xs h-6',
-            'inline-flex items-center gap-1',
-            'border border-transparent bg-muted/50 text-muted-foreground',
-            'hover:bg-muted hover:text-foreground transition-colors',
-            'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
-            mutation.isPending && 'opacity-60 cursor-wait',
+            'h-6 gap-1 rounded-full border border-transparent px-2 py-0.5 text-xs',
+            'bg-muted/50 text-muted-foreground hover:bg-muted hover:text-foreground',
             className,
           )}
         >
           <SmilePlus className="size-3.5" />
           <span aria-hidden="true">+</span>
-        </button>
+        </Button>
       }
       onSelect={handleSelect}
       open={open}

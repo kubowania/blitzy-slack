@@ -89,7 +89,10 @@ async function bootstrap(): Promise<void> {
       origin: env.CORS_ORIGIN,
       credentials: true,
     },
-    transports: ['websocket', 'polling'],
+    // Rule 2 — Real-time via WebSockets only. HTTP long-polling is forbidden,
+    // so the transport list is restricted to the WebSocket upgrade. The client
+    // (packages/web/src/lib/socket.ts) is pinned to the same single transport.
+    transports: ['websocket'],
     connectionStateRecovery: {
       maxDisconnectionDuration: CONNECTION_RECOVERY_WINDOW_MS,
       skipMiddlewares: false,
@@ -101,11 +104,19 @@ async function bootstrap(): Promise<void> {
   io.adapter(createAdapter(pubClient, subClient));
   logger.info('Socket.io Redis adapter attached');
 
-  // 5. Wire the JWT handshake middleware and every typed event handler
+  // 5. Expose the Socket.io server on the Express app so REST route handlers can
+  //    retrieve it via `req.app.get('io')` and broadcast realtime events after a
+  //    successful mutation (e.g. POST /api/messages -> message:new, the reaction
+  //    routes -> reaction:added / reaction:removed). This MUST run before routes
+  //    are exercised; otherwise `req.app.get('io')` is undefined and broadcasts
+  //    silently no-op.
+  app.set('io', io);
+
+  // 6. Wire the JWT handshake middleware and every typed event handler
   //    (defined in ./sockets/index.ts and its handlers/ subfolder).
   registerSocketHandlers(io);
 
-  // 6. Begin listening. Wrapped in a Promise so a bind failure (EADDRINUSE)
+  // 7. Begin listening. Wrapped in a Promise so a bind failure (EADDRINUSE)
   //    rejects through bootstrap().catch() instead of going unobserved.
   await new Promise<void>((resolve, reject) => {
     httpServer.once('error', reject);
@@ -117,7 +128,7 @@ async function bootstrap(): Promise<void> {
 
   logger.info({ port: env.PORT }, `API listening on http://localhost:${env.PORT}`);
 
-  // 7. Register graceful-shutdown handlers only after we are listening, so a
+  // 8. Register graceful-shutdown handlers only after we are listening, so a
   //    signal during bootstrap never tries to close a server that never opened.
   registerShutdownHandlers(httpServer, io);
 }

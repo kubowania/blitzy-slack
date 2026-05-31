@@ -1,9 +1,10 @@
 import { useCallback } from 'react';
+import { useQuery, type UseQueryResult } from '@tanstack/react-query';
 
-import type { AuthenticatedUser } from '@app/shared/types/user';
+import type { AuthenticatedUser, UserResponse } from '@app/shared/types/user';
 
-import { apiClient } from '@/lib/api-client';
-import { disconnectSocket } from '@/lib/socket';
+import { apiClient, type ApiError } from '@/lib/api-client';
+import { performLogout } from '@/lib/session';
 import { useAuthStore } from '@/stores/auth.store';
 
 /**
@@ -20,6 +21,31 @@ interface AuthResponse {
   token: string;
   /** Authenticated user identity returned alongside the token. */
   user: AuthenticatedUser;
+}
+
+/**
+ * TanStack Query key for the authenticated self profile (`GET /api/auth/me`).
+ * Exported so callers can invalidate it after a profile mutation.
+ */
+export const ME_QUERY_KEY = ['auth', 'me'] as const;
+
+/**
+ * Fetch the authenticated self view (`GET /api/auth/me`) and project it to the
+ * narrow {@link AuthenticatedUser} identity the auth store holds.
+ *
+ * A 401 here means the persisted token is no longer valid; the shared
+ * `api-client` interceptor runs `performLogout()` on that 401, so this function
+ * never has to clear state itself — it simply rejects and the cleared auth
+ * state propagates to subscribers.
+ */
+async function fetchMe(): Promise<AuthenticatedUser> {
+  const me = await apiClient.get<UserResponse>('/api/auth/me');
+  return {
+    id: me.id,
+    email: me.email,
+    displayName: me.displayName,
+    avatarUrl: me.avatarUrl,
+  };
 }
 
 /**
@@ -48,9 +74,18 @@ export interface UseAuthResult {
    */
   register: (email: string, password: string, displayName: string) => Promise<void>;
   /**
-   * Sign out the current user.
-   * Clears the auth store state, then disconnects the Socket.io singleton.
-   * Idempotent: safe to call when no user is signed in.
+   * Re-verify the persisted session against `GET /api/auth/me` and refresh the
+   * stored identity. Call on app mount (e.g. from the authenticated shell) so a
+   * session restored from `localStorage` is validated: a still-valid token
+   * refreshes `user`, while an expired/invalid token yields a 401 that the
+   * shared `api-client` turns into a full `performLogout()`. Throws `ApiError`
+   * on failure (callers may ignore — the logout side effect already ran).
+   */
+  refresh: () => Promise<void>;
+  /**
+   * Sign out the current user via the shared `performLogout()` orchestration:
+   * clears the auth store, disconnects the Socket.io singleton, AND clears the
+   * presence map. Idempotent: safe to call when no user is signed in.
    */
   logout: () => void;
 }
@@ -62,20 +97,21 @@ export interface UseAuthResult {
  * Read fields (`user`, `token`, `isAuthenticated`) re-render the consuming
  * component on auth-state changes via Zustand selectors.
  *
- * Action callbacks (`login`, `register`, `logout`) are stable references
- * across renders (wrapped in {@link useCallback}) so they integrate cleanly
- * with `react-hook-form`'s `handleSubmit` and memoized children.
+ * Action callbacks (`login`, `register`, `refresh`, `logout`) are stable
+ * references across renders (wrapped in {@link useCallback}) so they integrate
+ * cleanly with `react-hook-form`'s `handleSubmit` and memoized children.
  *
- * `logout` is the single orchestration point that pairs the store's
- * `logout()` with {@link disconnectSocket}: the store clears identity, then
- * the Socket.io singleton is torn down so a later re-authentication builds a
- * fresh connection with the new token.
+ * `logout` delegates to the shared `performLogout()` orchestration so the store
+ * reset, Socket.io teardown, and presence-map clear always happen together —
+ * the same path the `api-client` 401 interceptor uses, keeping user-initiated
+ * and session-expiry logout identical. `refresh` re-verifies a persisted
+ * session against `GET /api/auth/me`.
  */
 export function useAuth(): UseAuthResult {
   const user = useAuthStore((s) => s.user);
   const token = useAuthStore((s) => s.token);
   const storeLogin = useAuthStore((s) => s.login);
-  const storeLogout = useAuthStore((s) => s.logout);
+  const storeSetUser = useAuthStore((s) => s.setUser);
 
   const login = useCallback(
     async (email: string, password: string): Promise<void> => {
@@ -100,10 +136,15 @@ export function useAuth(): UseAuthResult {
     [storeLogin],
   );
 
+  const refresh = useCallback(async (): Promise<void> => {
+    const identity = await fetchMe();
+    storeSetUser(identity);
+  }, [storeSetUser]);
+
   const logout = useCallback((): void => {
-    storeLogout();
-    disconnectSocket();
-  }, [storeLogout]);
+    // Full teardown (auth store + socket + presence) via the shared orchestrator.
+    performLogout();
+  }, []);
 
   return {
     user,
@@ -111,6 +152,34 @@ export function useAuth(): UseAuthResult {
     isAuthenticated: user !== null && token !== null,
     login,
     register,
+    refresh,
     logout,
   };
+}
+
+/**
+ * Declarative companion to {@link useAuth.refresh}: a TanStack Query that
+ * verifies the persisted session against `GET /api/auth/me` and syncs the
+ * stored identity, fetching only when a token is present.
+ *
+ * Intended to be mounted once by the authenticated shell so a session restored
+ * from `localStorage` is validated on load. On success the auth store's `user`
+ * is refreshed; on a 401 the shared `api-client` interceptor runs
+ * `performLogout()`, which clears the token and disables this query.
+ *
+ * @returns the TanStack Query result for the self profile.
+ */
+export function useMe(): UseQueryResult<AuthenticatedUser, ApiError> {
+  const token = useAuthStore((s) => s.token);
+  const storeSetUser = useAuthStore((s) => s.setUser);
+
+  return useQuery<AuthenticatedUser, ApiError>({
+    queryKey: ME_QUERY_KEY,
+    enabled: token !== null,
+    queryFn: async (): Promise<AuthenticatedUser> => {
+      const identity = await fetchMe();
+      storeSetUser(identity);
+      return identity;
+    },
+  });
 }

@@ -10,9 +10,15 @@
  * Behavioral contract:
  *  - Presence is NEVER persisted to Postgres; it is a real-time-only signal
  *    stored exclusively in Redis. The key shape is `presence:<userId>`, the
- *    value is the ISO 8601 timestamp of the last heartbeat, and the key TTL is
- *    the `AWAY_THRESHOLD_MS` window, after which a missing key is interpreted as
+ *    value is a JSON document `{ lastSeenMs, state }` (epoch-ms of the last
+ *    heartbeat plus the write-time bucket), and the key TTL is the
+ *    `AWAY_THRESHOLD_MS` window, after which a missing key is interpreted as
  *    `offline` (Redis garbage-collects fully-offline users without a cron job).
+ *  - `lastSeenMs` is the authoritative age signal: read-time state is always
+ *    re-derived from `Date.now() - lastSeenMs` (the persisted `state` is the
+ *    write-time classification, retained for the payload contract and for
+ *    debugging — it is never trusted as the live bucket because it would go
+ *    stale as the clock advances past the online window between reads).
  *  - Bucketing (per AAP §0.8.4), lower bound inclusive, upper bound exclusive:
  *      online   — last heartbeat in [0, ONLINE_THRESHOLD_MS)
  *      away     — last heartbeat in [ONLINE_THRESHOLD_MS, AWAY_THRESHOLD_MS)
@@ -64,29 +70,87 @@ function presenceKey(userId: string): string {
 }
 
 /**
- * Map an ISO 8601 last-seen timestamp (or `null` for "no heartbeat") to a
- * {@link PresenceState}. This is the canonical bucketing logic shared by
- * {@link getPresence}, {@link getPresenceMap}, and {@link recordHeartbeat}.
+ * Persisted Redis presence document. Stored as `JSON.stringify`-ed JSON under
+ * `presence:<userId>`; `lastSeenMs` is the epoch-millisecond timestamp of the
+ * last heartbeat and `state` is the bucket computed at write time (always
+ * `online` immediately after a heartbeat).
+ */
+interface PresenceRecord {
+  /** Epoch milliseconds of the last recorded heartbeat. */
+  lastSeenMs: number;
+  /** Presence bucket classified at write time. */
+  state: PresenceState;
+}
+
+/**
+ * Bucket an age (milliseconds since the last heartbeat) into a
+ * {@link PresenceState}. Lower bound inclusive, upper bound exclusive, per
+ * AAP §0.8.4.
  *
- * Returns `offline` when the input is `null` or cannot be parsed (a malformed
- * value, e.g. from manual `redis-cli` debugging, is treated defensively as
- * offline rather than throwing).
- *
- * @param lastSeenIso - ISO 8601 timestamp string, or `null` when no key exists
+ * @param ageMs - milliseconds elapsed since the last heartbeat
  * @returns the bucketed presence state
  */
-function stateFromLastSeen(lastSeenIso: string | null): PresenceState {
-  if (lastSeenIso === null) {
-    return 'offline';
-  }
-  const lastSeenMs = Date.parse(lastSeenIso);
-  if (Number.isNaN(lastSeenMs)) {
-    return 'offline';
-  }
-  const ageMs = Date.now() - lastSeenMs;
+function bucketFromAge(ageMs: number): PresenceState {
   if (ageMs < ONLINE_THRESHOLD_MS) return 'online';
   if (ageMs < AWAY_THRESHOLD_MS) return 'away';
   return 'offline';
+}
+
+/**
+ * Parse a raw Redis value into a {@link PresenceRecord}, or `null` when the key
+ * is absent or the stored value is malformed.
+ *
+ * Defensive by design: a missing key, non-JSON text (e.g. a legacy bare ISO
+ * string or a manual `redis-cli` edit), or a JSON document without a numeric
+ * `lastSeenMs` all resolve to `null` (→ `offline`) rather than throwing.
+ *
+ * @param raw - the raw string read from Redis, or `null` when no key exists
+ * @returns the parsed record, or `null` when absent/malformed
+ */
+function parsePresenceRecord(raw: string | null): PresenceRecord | null {
+  if (raw === null) {
+    return null;
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return null;
+  }
+  if (typeof parsed !== 'object' || parsed === null) {
+    return null;
+  }
+  const candidate = parsed as { lastSeenMs?: unknown; state?: unknown };
+  if (typeof candidate.lastSeenMs !== 'number' || Number.isNaN(candidate.lastSeenMs)) {
+    return null;
+  }
+  const storedState: PresenceState =
+    candidate.state === 'online' || candidate.state === 'away' || candidate.state === 'offline'
+      ? candidate.state
+      : 'online';
+  return { lastSeenMs: candidate.lastSeenMs, state: storedState };
+}
+
+/**
+ * Resolve the LIVE presence state from a parsed record (or `null` for "no
+ * heartbeat"). The bucket is always re-derived from the current clock so a
+ * record written 4 minutes ago correctly reads as `away`, and one written 6
+ * minutes ago reads as `offline`, even though it was stored as `online`.
+ *
+ * This is the canonical resolution shared by {@link getPresence},
+ * {@link getPresenceMap}, and {@link recordHeartbeat}.
+ *
+ * @param record - the parsed presence record, or `null` when the key is absent
+ * @returns the bucketed presence state for "now"
+ */
+function resolveState(record: PresenceRecord | null): PresenceState {
+  if (record === null) {
+    return 'offline';
+  }
+  // Guard against a future timestamp (clock skew between API instances): a
+  // negative age means the heartbeat is "now or later", i.e. online.
+  const ageMs = Math.max(0, Date.now() - record.lastSeenMs);
+  return bucketFromAge(ageMs);
 }
 
 /**
@@ -123,21 +187,22 @@ export interface HeartbeatResult {
  */
 export async function recordHeartbeat(userId: string): Promise<HeartbeatResult> {
   const key = presenceKey(userId);
-  const previousIso = await redisClient.get(key);
-  const previousState = stateFromLastSeen(previousIso);
-
-  const nowIso = new Date().toISOString();
-  await redisClient.setex(key, PRESENCE_TTL_SECONDS, nowIso);
+  const previousState = resolveState(parsePresenceRecord(await redisClient.get(key)));
 
   // A successful write means the user is online right now, so the post-write
-  // state is always 'online'; no re-read is required.
+  // state is always 'online'; no re-read is required. The JSON document records
+  // both the epoch-ms timestamp (the authoritative age signal) and the
+  // write-time bucket, satisfying the `{ lastSeenMs, state }` payload contract.
+  const now = Date.now();
   const currentState: PresenceState = 'online';
+  const record: PresenceRecord = { lastSeenMs: now, state: currentState };
+  await redisClient.setex(key, PRESENCE_TTL_SECONDS, JSON.stringify(record));
 
   if (previousState !== currentState) {
     logger.debug({ userId, previousState, currentState }, 'presence.transition');
   }
 
-  return { previousState, currentState, lastSeenAt: nowIso };
+  return { previousState, currentState, lastSeenAt: new Date(now).toISOString() };
 }
 
 /**
@@ -149,8 +214,8 @@ export async function recordHeartbeat(userId: string): Promise<HeartbeatResult> 
  */
 export async function getPresence(userId: string): Promise<PresenceState> {
   const key = presenceKey(userId);
-  const lastSeenIso = await redisClient.get(key);
-  return stateFromLastSeen(lastSeenIso);
+  const raw = await redisClient.get(key);
+  return resolveState(parsePresenceRecord(raw));
 }
 
 /**
@@ -181,7 +246,7 @@ export async function getPresenceMap(
       continue;
     }
     const value = values[i] ?? null;
-    result[userId] = stateFromLastSeen(value);
+    result[userId] = resolveState(parsePresenceRecord(value));
   }
   return result;
 }

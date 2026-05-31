@@ -31,6 +31,8 @@ export * from './schemas/auth.js';
 export * from './schemas/channel.js';
 export * from './schemas/message.js';
 export * from './schemas/dm.js';
+export * from './schemas/user.js';
+export * from './schemas/presence.js';
 
 // ---------------------------------------------------------------------------
 // Constants (Socket.io event names + numeric limits)

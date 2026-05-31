@@ -2,8 +2,21 @@
  * @app/api — Health route (PUBLIC, no auth).
  *
  * GET /api/health
- *   200 { ok: true,  postgres: "ok",          redis: "ok"          } — all subsystems healthy
- *   503 { ok: false, postgres: "ok" | "error", redis: "ok" | "error" } — degraded
+ *   200 { ok: true,  api: "ok", postgres: "ok",  redis: "ok",  infrastructure: "ok"  } — healthy
+ *   503 { ok: false, api: "ok", postgres: ...,    redis: ...,    infrastructure: ...    } — degraded
+ *
+ * Readiness fields (matches the prompt's example contract — Docker, Postgres,
+ * Redis, and the API):
+ *   - `api`            — the API process itself; always "ok" when this handler
+ *                        runs (the process is serving the response by definition).
+ *   - `postgres`       — PostgreSQL liveness (`SELECT 1`).
+ *   - `redis`          — Redis liveness (`PING` → `PONG`).
+ *   - `infrastructure` — aggregate readiness of the Docker-provisioned backing
+ *                        services (Postgres AND Redis); the signal `make local`
+ *                        waits on before seeding. This stands in for "Docker"
+ *                        readiness, which the API cannot probe directly.
+ *   - `ok`             — boolean AND of `api` and `infrastructure`; clients may
+ *                        branch on either the status code or this field.
  *
  * Polled by:
  *   - the root Makefile's `local` target (readiness loop) before `make seed`
@@ -38,8 +51,10 @@ type SubsystemStatus = 'ok' | 'error';
  */
 interface HealthResponse {
   ok: boolean;
+  api: SubsystemStatus;
   postgres: SubsystemStatus;
   redis: SubsystemStatus;
+  infrastructure: SubsystemStatus;
 }
 
 /**
@@ -97,12 +112,22 @@ router.get('/', async (_req: Request, res: Response<HealthResponse>) => {
   // Both probes catch their own errors, so this Promise.all never rejects.
   const [postgresStatus, redisStatus] = await Promise.all([checkPostgres(), checkRedis()]);
 
-  const ok = postgresStatus === 'ok' && redisStatus === 'ok';
+  // The API process is serving this response, so it is live by definition.
+  const apiStatus: SubsystemStatus = 'ok';
+  // The Docker-provisioned backing services are ready only when BOTH probes
+  // pass; this aggregate is the "infrastructure"/Docker readiness signal that
+  // `make local` blocks on before seeding and opening the browser.
+  const infrastructureStatus: SubsystemStatus =
+    postgresStatus === 'ok' && redisStatus === 'ok' ? 'ok' : 'error';
+
+  const ok = apiStatus === 'ok' && infrastructureStatus === 'ok';
   const status = ok ? 200 : 503;
 
   res.status(status).json({
     ok,
+    api: apiStatus,
     postgres: postgresStatus,
     redis: redisStatus,
+    infrastructure: infrastructureStatus,
   });
 });

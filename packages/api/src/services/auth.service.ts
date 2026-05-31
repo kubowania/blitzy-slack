@@ -127,6 +127,17 @@ export function verifyToken(token: string): AuthTokenPayload {
     decoded = jwt.verify(token, env.JWT_SECRET, { algorithms: ['HS256'] });
   } catch (err) {
     logger.debug({ err }, 'auth.verifyToken.failed');
+    // Classify the verification failure so the HTTP layer can return a stable
+    // machine-readable `code`. `TokenExpiredError` extends `JsonWebTokenError`,
+    // so it MUST be checked first; otherwise the broader guard would shadow it.
+    // Any non-JWT error falls through to a generic 401 with no code (no detail
+    // about which check failed is leaked in the message).
+    if (err instanceof jwt.TokenExpiredError) {
+      throw new UnauthorizedError('Token has expired', 'token_expired');
+    }
+    if (err instanceof jwt.JsonWebTokenError) {
+      throw new UnauthorizedError('Invalid authentication token', 'token_invalid');
+    }
     throw new UnauthorizedError('Invalid or expired token');
   }
 

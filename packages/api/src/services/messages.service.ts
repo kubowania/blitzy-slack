@@ -280,10 +280,13 @@ function toMessageDto(
  * membership so a non-member cannot post or react in a channel they have not
  * joined.
  *
+ * Exported so the Socket.io typing handler can enforce the SAME membership ACL
+ * before broadcasting `typing:start` / `typing:stop` into a channel room.
+ *
  * @throws {NotFoundError} when the channel does not exist.
  * @throws {ForbiddenError} when the caller is not a member of the channel.
  */
-async function assertChannelAccess(channelId: string, userId: string): Promise<void> {
+export async function assertChannelAccess(channelId: string, userId: string): Promise<void> {
   const channel = await prisma.channel.findUnique({
     where: { id: channelId },
     select: { id: true },
@@ -303,10 +306,13 @@ async function assertChannelAccess(channelId: string, userId: string): Promise<v
 /**
  * Verify the caller is a participant of the given direct-message conversation.
  *
+ * Exported so the Socket.io typing handler can enforce the SAME participant ACL
+ * before broadcasting `typing:start` / `typing:stop` into a DM room.
+ *
  * @throws {NotFoundError} when the DM does not exist.
  * @throws {ForbiddenError} when the caller is not a participant.
  */
-async function assertDmAccess(dmId: string, userId: string): Promise<void> {
+export async function assertDmAccess(dmId: string, userId: string): Promise<void> {
   const dm = await prisma.directMessage.findUnique({
     where: { id: dmId },
     select: { id: true },
