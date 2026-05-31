@@ -47,10 +47,39 @@ export interface UseMessagesOptions {
  * One page of the message timeline as returned by the API. Messages are ordered
  * newest-first within a page; `nextCursor` points at the next OLDER page and is
  * `null` once the oldest message has been reached.
+ *
+ * Exported so other modules that patch the same cache (e.g. the thread panel's
+ * reply fan-out) share the exact page shape.
  */
-interface MessagesPage {
+export interface MessagesPage {
   messages: MessageWithAuthor[];
   nextCursor: string | null;
+}
+
+/**
+ * The TanStack Query key for a channel or DM message timeline. The scope is
+ * encoded as `'channel:<id>'` or `'dm:<id>'` (and `null` when neither is set so
+ * the query stays disabled).
+ */
+export type MessagesQueryKey = readonly ['messages', string | null];
+
+/**
+ * Builds the {@link MessagesQueryKey} for a timeline scope. Exported as the
+ * single source of truth for the cache key so callers outside this hook (for
+ * example, fanning a thread reply's `replyCount` into the parent timeline) target
+ * the SAME cache entry without duplicating the key scheme.
+ *
+ * EXACTLY ONE of `channelId` / `dmId` should be provided; passing neither yields
+ * a `null` scope (a disabled, never-fetched query key).
+ */
+export function messagesQueryKey(scope: { channelId?: string; dmId?: string }): MessagesQueryKey {
+  const scopeKey =
+    scope.channelId !== undefined
+      ? `channel:${scope.channelId}`
+      : scope.dmId !== undefined
+        ? `dm:${scope.dmId}`
+        : null;
+  return ['messages', scopeKey] as const;
 }
 
 /**
@@ -87,10 +116,12 @@ export interface UseMessagesResult {
  * conversation. The fetch is gated on an authenticated token and a resolved
  * scope.
  *
- * The `message:new` subscription prepends only top-level (`parentId === null`)
- * messages that match this hook's scope, de-duplicating by id before inserting
- * into the first page. Thread replies and messages for other conversations are
- * ignored.
+ * The `message:new` subscription handles two in-scope cases: a top-level
+ * (`parentId === null`) message is prepended into the first page (de-duplicated
+ * by id), while a thread reply (`parentId !== null`) increments its parent
+ * message's `replyCount` in place — guarded by a ref-tracked id set so a
+ * re-delivered event (e.g. after a socket reconnect) cannot double-count.
+ * Messages for other conversations are ignored.
  *
  * The `reaction:added` / `reaction:removed` subscriptions patch the `reactions`
  * array of the affected message in place, searching every loaded page by id.
@@ -113,9 +144,8 @@ export function useMessages(options: UseMessagesOptions): UseMessagesResult {
   // `userIds` list.
   const currentUserId = useAuthStore((s) => s.user?.id ?? null);
 
-  const scopeKey =
-    channelId !== undefined ? `channel:${channelId}` : dmId !== undefined ? `dm:${dmId}` : null;
-  const queryKey = ['messages', scopeKey] as const;
+  const queryKey = messagesQueryKey({ channelId, dmId });
+  const scopeKey = queryKey[1];
 
   const query = useInfiniteQuery<
     MessagesPage,
@@ -151,35 +181,78 @@ export function useMessages(options: UseMessagesOptions): UseMessagesResult {
     await query.fetchNextPage();
   }, [query]);
 
+  // Reply ids already folded into a parent's `replyCount`. Incrementing a
+  // counter is not naturally idempotent (unlike the id-presence check used for
+  // the top-level prepend), so a re-delivered `message:new` is guarded here.
+  const countedReplyIdsRef = useRef<Set<string>>(new Set());
+
   useSocketEvent('message:new', (incoming): void => {
-    const inScope =
-      incoming.parentId === null &&
-      ((channelId !== undefined && incoming.channelId === channelId) ||
-        (dmId !== undefined && incoming.dmId === dmId));
-    if (!inScope) {
+    const matchesScope =
+      (channelId !== undefined && incoming.channelId === channelId) ||
+      (dmId !== undefined && incoming.dmId === dmId);
+    if (!matchesScope) {
       return;
     }
+
+    // Top-level message → prepend into the first page (idempotent by id).
+    if (incoming.parentId === null) {
+      queryClient.setQueryData<InfiniteData<MessagesPage>>(
+        queryKey,
+        (current): InfiniteData<MessagesPage> | undefined => {
+          if (current === undefined) {
+            return current;
+          }
+          const [firstPage, ...restPages] = current.pages;
+          if (firstPage === undefined) {
+            return current;
+          }
+          if (firstPage.messages.some((m) => m.id === incoming.id)) {
+            return current;
+          }
+          const updatedFirstPage: MessagesPage = {
+            ...firstPage,
+            messages: [incoming, ...firstPage.messages],
+          };
+          return {
+            ...current,
+            pages: [updatedFirstPage, ...restPages],
+          };
+        },
+      );
+      return;
+    }
+
+    // Thread reply → bump the parent message's `replyCount` once, so the
+    // timeline's "N replies" indicator updates live even while the thread panel
+    // is closed.
+    const parentId = incoming.parentId;
+    if (countedReplyIdsRef.current.has(incoming.id)) {
+      return;
+    }
+    countedReplyIdsRef.current.add(incoming.id);
     queryClient.setQueryData<InfiniteData<MessagesPage>>(
       queryKey,
       (current): InfiniteData<MessagesPage> | undefined => {
         if (current === undefined) {
           return current;
         }
-        const [firstPage, ...restPages] = current.pages;
-        if (firstPage === undefined) {
+        let didChange = false;
+        const pages = current.pages.map((page): MessagesPage => {
+          if (!page.messages.some((m) => m.id === parentId)) {
+            return page;
+          }
+          didChange = true;
+          return {
+            ...page,
+            messages: page.messages.map((m) =>
+              m.id === parentId ? { ...m, replyCount: m.replyCount + 1 } : m,
+            ),
+          };
+        });
+        if (!didChange) {
           return current;
         }
-        if (firstPage.messages.some((m) => m.id === incoming.id)) {
-          return current;
-        }
-        const updatedFirstPage: MessagesPage = {
-          ...firstPage,
-          messages: [incoming, ...firstPage.messages],
-        };
-        return {
-          ...current,
-          pages: [updatedFirstPage, ...restPages],
-        };
+        return { ...current, pages };
       },
     );
   });

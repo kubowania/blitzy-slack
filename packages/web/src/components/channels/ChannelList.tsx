@@ -37,7 +37,9 @@ export function ChannelList({ className }: ChannelListProps): React.JSX.Element 
   return (
     <section aria-label="Channels" className={cn('flex flex-col gap-1 py-2', className)}>
       <div className="flex items-center justify-between px-2">
-        <h2 className="text-xs font-semibold text-sidebar-foreground/70">Channels</h2>
+        <h2 className="text-xs font-semibold uppercase tracking-wide text-sidebar-foreground/70">
+          Channels
+        </h2>
         <Button
           type="button"
           variant="ghost"

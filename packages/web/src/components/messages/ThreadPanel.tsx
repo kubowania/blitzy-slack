@@ -12,15 +12,20 @@
  *      AAP §0.4.4).
  *   3. Renders the reply list with {@link MessageList} in override mode
  *      (`messagesOverride`), oldest-first per the `Thread.replies` contract.
- *   4. Subscribes to three Socket.io server events and reconciles the cache
- *      directly (Rule 2 — real-time fan-out, never polling): `message:new`
- *      appends a reply when its `parentId` matches this thread; `reaction:added`
- *      and `reaction:removed` update reaction summaries on the parent or any
- *      reply.
- *   5. Mounts a {@link MessageComposer} at the bottom that posts replies scoped
+ *   4. Joins the `thread:<parentMessageId>` Socket.io room on open and leaves it
+ *      on close/unmount (the backend does not auto-join thread rooms), then
+ *      subscribes to three server events and reconciles the cache directly
+ *      (Rule 2 — real-time fan-out, never polling): `message:new` appends a
+ *      reply when its `parentId` matches this thread; `reaction:added` and
+ *      `reaction:removed` update reaction summaries on the parent or any reply,
+ *      recomputing `hasCurrentUser` against the local viewer's id.
+ *   5. Validates the fetched payload against `threadResponseSchema` so a
+ *      server/client shape drift surfaces as a thrown error at the fetch
+ *      boundary rather than a silent crash deep in the render tree.
+ *   6. Mounts a {@link MessageComposer} at the bottom that posts replies scoped
  *      to `parentMessageId`.
- *   6. Closes through the `onClose` callback (the caller typically navigates
- *      back), wired to the Sheet's `onOpenChange`.
+ *   7. Closes through the `onClose` callback wired to the Sheet's
+ *      `onOpenChange`; the parent route/shell owns where closing navigates to.
  *
  * Visual reference (Rule 1): screenshots/Slack web Jul 2024 29.png — a flush
  * three-section right panel (header → scrollable parent + replies → composer),
@@ -46,9 +51,11 @@ import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { MessageItem } from './MessageItem';
 import { MessageList } from './MessageList';
 import { MessageComposer } from './MessageComposer';
-import { useSocketEvent } from '@/hooks/useSocket';
+import { useSocket, useSocketEvent } from '@/hooks/useSocket';
 import { apiClient, type ApiError } from '@/lib/api-client';
 import { cn } from '@/lib/utils';
+import { useAuthStore } from '@/stores/auth.store';
+import { threadResponseSchema } from '@app/shared/schemas/message';
 import type { MessageWithAuthor, ReactionSummary, Thread } from '@app/shared/types/message';
 
 /**
@@ -75,19 +82,38 @@ export function ThreadPanel({
   className,
 }: ThreadPanelProps): React.JSX.Element {
   const queryClient = useQueryClient();
+  const { emit } = useSocket();
+  // The local viewer's id; reaction broadcasts carry a `hasCurrentUser` that
+  // reflects the REACTOR, so cache updates recompute it against this id.
+  const currentUserId = useAuthStore((s) => s.user?.id ?? null);
   const queryKey: readonly unknown[] = ['thread', parentMessageId];
 
-  // Fetch parent + replies. The hook is always invoked (Rules of Hooks) but
-  // disabled while the panel is closed to avoid spurious fetches; the cached
-  // result is retained for `staleTime` so reopening within the window is
-  // instant (no refetch).
+  // Fetch parent + replies, disabled while the panel is closed. The raw
+  // response is validated through `threadResponseSchema` (a `ZodError` at the
+  // fetch boundary if the server shape drifts).
   const threadQuery = useQuery<Thread, ApiError>({
     queryKey,
     queryFn: async (): Promise<Thread> =>
-      apiClient.get<Thread>(`/api/messages/${parentMessageId}/replies`),
+      apiClient.get(`/api/messages/${parentMessageId}/replies`, {
+        schema: threadResponseSchema,
+      }),
     enabled: open,
     staleTime: 30_000,
   });
+
+  // Thread rooms are not auto-joined by the backend, so the panel explicitly
+  // joins `thread:<parentMessageId>` while open and leaves on close/unmount.
+  // Without this subscription, reactions on replies (broadcast to the thread
+  // room only) would never reach an open panel.
+  React.useEffect(() => {
+    if (!open) {
+      return undefined;
+    }
+    emit('thread:join', parentMessageId);
+    return () => {
+      emit('thread:leave', parentMessageId);
+    };
+  }, [open, parentMessageId, emit]);
 
   // Real-time: when a new message arrives whose `parentId` is this thread,
   // append it to the cached replies array (idempotent against duplicate
@@ -116,7 +142,7 @@ export function ThreadPanel({
       if (prev === undefined) {
         return prev;
       }
-      return updateReactionsInThread(prev, messageId, reaction.emoji, reaction);
+      return updateReactionsInThread(prev, messageId, reaction.emoji, reaction, currentUserId);
     });
   });
 
@@ -126,7 +152,7 @@ export function ThreadPanel({
       if (prev === undefined) {
         return prev;
       }
-      return removeReactionFromThread(prev, messageId, emoji, userId);
+      return removeReactionFromThread(prev, messageId, emoji, userId, currentUserId);
     });
   });
 
@@ -279,25 +305,32 @@ function ThreadSkeleton(): React.JSX.Element {
 /**
  * Returns a copy of `thread` with the reaction summary for `(messageId, emoji)`
  * replaced by `newSummary` (or appended when the message has no summary for
- * that emoji yet). Applies to the parent and every reply; messages whose id
- * does not match are returned unchanged. Pure — never mutates its input.
+ * that emoji yet). `hasCurrentUser` is recomputed from the authoritative
+ * `userIds` against `currentUserId` (the broadcast payload's flag reflects the
+ * reactor, not this viewer). Applies to the parent and every reply; messages
+ * whose id does not match are returned unchanged. Pure — never mutates input.
  */
 function updateReactionsInThread(
   thread: Thread,
   messageId: string,
   emoji: string,
   newSummary: ReactionSummary,
+  currentUserId: string | null,
 ): Thread {
+  const normalized: ReactionSummary = {
+    ...newSummary,
+    hasCurrentUser: currentUserId !== null && newSummary.userIds.includes(currentUserId),
+  };
   const updateOne = (message: MessageWithAuthor): MessageWithAuthor => {
     if (message.id !== messageId) {
       return message;
     }
     const existingIdx = message.reactions.findIndex((r) => r.emoji === emoji);
     if (existingIdx === -1) {
-      return { ...message, reactions: [...message.reactions, newSummary] };
+      return { ...message, reactions: [...message.reactions, normalized] };
     }
     const nextReactions = [...message.reactions];
-    nextReactions[existingIdx] = newSummary;
+    nextReactions[existingIdx] = normalized;
     return { ...message, reactions: nextReactions };
   };
   return {
@@ -309,15 +342,17 @@ function updateReactionsInThread(
 /**
  * Returns a copy of `thread` with `userId` removed from the `(messageId, emoji)`
  * reaction. When that was the last reactor, the summary is dropped entirely;
- * otherwise the count and reactor list are decremented. Applies to the parent
- * and every reply; non-matching messages are returned unchanged. Pure — never
- * mutates its input.
+ * otherwise the count and reactor list are decremented and `hasCurrentUser` is
+ * recomputed from the remaining `userIds` against `currentUserId`. Applies to
+ * the parent and every reply; non-matching messages are returned unchanged.
+ * Pure — never mutates its input.
  */
 function removeReactionFromThread(
   thread: Thread,
   messageId: string,
   emoji: string,
   userId: string,
+  currentUserId: string | null,
 ): Thread {
   const updateOne = (message: MessageWithAuthor): MessageWithAuthor => {
     if (message.id !== messageId) {
@@ -345,8 +380,7 @@ function removeReactionFromThread(
       ...existing,
       userIds: nextUserIds,
       count: nextUserIds.length,
-      hasCurrentUser:
-        existing.hasCurrentUser && existing.userIds[0] !== userId ? existing.hasCurrentUser : false,
+      hasCurrentUser: currentUserId !== null && nextUserIds.includes(currentUserId),
     };
     return { ...message, reactions: nextReactions };
   };

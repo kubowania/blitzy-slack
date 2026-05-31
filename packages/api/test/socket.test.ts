@@ -382,6 +382,27 @@ async function waitForRoomMembership(
   throw new Error(`Room ${room} did not reach ${expectedSize} member(s) within ${timeoutMs}ms`);
 }
 
+/**
+ * Polls the server-side adapter until `room` holds NO sockets. Used to
+ * deterministically await an asynchronous `socket.leave` (the `dm:leave` /
+ * `thread:leave` handlers join/leave through an awaited adapter call).
+ */
+async function waitForRoomEmpty(
+  io: TestIOServer,
+  room: string,
+  timeoutMs = 2000,
+): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() <= deadline) {
+    const sockets = await io.in(room).fetchSockets();
+    if (sockets.length === 0) {
+      return;
+    }
+    await new Promise<void>((resolve) => setTimeout(resolve, 25));
+  }
+  throw new Error(`Room ${room} was not empty within ${timeoutMs}ms`);
+}
+
 // ---------------------------------------------------------------------------
 // Suite
 // ---------------------------------------------------------------------------
@@ -713,6 +734,201 @@ describe('Socket.io integration (real-time WebSocket layer)', () => {
       expect(payload).not.toHaveProperty('reaction');
       expect(payload).not.toHaveProperty('count');
       expect(payload).not.toHaveProperty('userIds');
+    });
+  });
+
+  describe('subscription handler — thread:join / thread:leave / dm:join / dm:leave', () => {
+    /** A well-formed cuid that resolves to no row (404 fixtures). */
+    const MISSING_CUID = 'clxnonexistent00000000000';
+
+    it('thread:join subscribes the live socket to the thread:<parentId> room', async () => {
+      const { token, user } = await registerUser();
+      const channel = await createTestChannel({ token, isPrivate: false });
+      const parent = await prismaTest.message.create({
+        data: { content: 'thread parent', authorId: user.id, channelId: channel.id },
+      });
+
+      const client = await connectAndTrack(signTestToken({ sub: user.id, email: user.email }));
+      client.emit(SOCKET_EVENTS.THREAD_JOIN, parent.id);
+
+      await waitForRoomMembership(server.io, `thread:${parent.id}`, 1);
+      const sockets = await server.io.in(`thread:${parent.id}`).fetchSockets();
+      expect(sockets).toHaveLength(1);
+    });
+
+    it('delivers a reaction on a thread REPLY (which targets the thread room ONLY) to a thread:join subscriber', async () => {
+      // Seed a channel with a parent + one threaded reply.
+      const { token, user: author } = await registerUser();
+      const channel = await createTestChannel({ token, isPrivate: false });
+      const parent = await prismaTest.message.create({
+        data: { content: 'parent', authorId: author.id, channelId: channel.id },
+      });
+      const reply = await prismaTest.message.create({
+        data: {
+          content: 'reply',
+          authorId: author.id,
+          channelId: channel.id,
+          parentId: parent.id,
+        },
+      });
+
+      // A second channel member who will react on the reply. The reaction
+      // handler enforces channel membership (assertChannelAccess), so the
+      // membership row is seeded directly via Prisma (Rule 4 permits non-user
+      // fixtures; the user itself was created through registerUser()).
+      const { user: reactor } = await registerUser();
+      await prismaTest.channelMember.create({
+        data: { channelId: channel.id, userId: reactor.id, role: 'member' },
+      });
+
+      // The observer is a channel member (auto-joined the channel room at
+      // connect) AND explicitly thread:joins. Because a reaction on a reply
+      // (`parentId !== null`) routes to `thread:<parentId>` ONLY — never the
+      // channel room — receipt PROVES the thread-room subscription delivered it.
+      const observer = await connectAndTrack(
+        signTestToken({ sub: author.id, email: author.email }),
+      );
+      observer.emit(SOCKET_EVENTS.THREAD_JOIN, parent.id);
+      await waitForRoomMembership(server.io, `thread:${parent.id}`, 1);
+
+      const reactorClient = await connectAndTrack(
+        signTestToken({ sub: reactor.id, email: reactor.email }),
+      );
+
+      const receivedP = waitForEvent(observer, SOCKET_EVENTS.REACTION_ADDED);
+      reactorClient.emit(SOCKET_EVENTS.REACTION_ADD, { messageId: reply.id, emoji: '👍' });
+
+      const [payload] = await receivedP;
+      expect(payload.messageId).toBe(reply.id);
+      expect(payload.reaction.emoji).toBe('👍');
+    });
+
+    it('does NOT deliver a reply reaction to a channel member who has not thread:joined', async () => {
+      const { token, user: author } = await registerUser();
+      const channel = await createTestChannel({ token, isPrivate: false });
+      const parent = await prismaTest.message.create({
+        data: { content: 'parent', authorId: author.id, channelId: channel.id },
+      });
+      const reply = await prismaTest.message.create({
+        data: {
+          content: 'reply',
+          authorId: author.id,
+          channelId: channel.id,
+          parentId: parent.id,
+        },
+      });
+
+      // The observer is a channel member (auto-joined the channel room) but does
+      // NOT thread:join. Since the reply reaction targets the thread room only,
+      // the channel-room membership must NOT deliver it — this is precisely the
+      // gap that makes thread:join mandatory.
+      const observer = await connectAndTrack(
+        signTestToken({ sub: author.id, email: author.email }),
+      );
+      const noEventP = expectNoEvent(observer, SOCKET_EVENTS.REACTION_ADDED);
+      observer.emit(SOCKET_EVENTS.REACTION_ADD, { messageId: reply.id, emoji: '👍' });
+      await noEventP;
+    });
+
+    it('thread:leave unsubscribes the socket from the thread room', async () => {
+      const { token, user } = await registerUser();
+      const channel = await createTestChannel({ token, isPrivate: false });
+      const parent = await prismaTest.message.create({
+        data: { content: 'thread parent', authorId: user.id, channelId: channel.id },
+      });
+
+      const client = await connectAndTrack(signTestToken({ sub: user.id, email: user.email }));
+      client.emit(SOCKET_EVENTS.THREAD_JOIN, parent.id);
+      await waitForRoomMembership(server.io, `thread:${parent.id}`, 1);
+
+      client.emit(SOCKET_EVENTS.THREAD_LEAVE, parent.id);
+      await waitForRoomEmpty(server.io, `thread:${parent.id}`);
+    });
+
+    it('emits an error (FORBIDDEN) and does not join when thread:join targets an inaccessible parent', async () => {
+      const { token: ownerToken } = await registerUser();
+      const privateChannel = await createTestChannel({ token: ownerToken, isPrivate: true });
+      const parent = await prismaTest.message.create({
+        data: {
+          content: 'private parent',
+          authorId: privateChannel.createdById,
+          channelId: privateChannel.id,
+        },
+      });
+
+      const { user: outsider } = await registerUser();
+      const client = await connectAndTrack(
+        signTestToken({ sub: outsider.id, email: outsider.email }),
+      );
+
+      const errP = waitForEvent(client, SOCKET_EVENTS.ERROR);
+      client.emit(SOCKET_EVENTS.THREAD_JOIN, parent.id);
+
+      const [err] = await errP;
+      expect(err.code).toBe('FORBIDDEN');
+      const sockets = await server.io.in(`thread:${parent.id}`).fetchSockets();
+      expect(sockets).toHaveLength(0);
+    });
+
+    it('emits an error (NOT_FOUND) when thread:join targets a non-existent parent', async () => {
+      const { user } = await registerUser();
+      const client = await connectAndTrack(signTestToken({ sub: user.id, email: user.email }));
+
+      const errP = waitForEvent(client, SOCKET_EVENTS.ERROR);
+      client.emit(SOCKET_EVENTS.THREAD_JOIN, MISSING_CUID);
+
+      const [err] = await errP;
+      expect(err.code).toBe('NOT_FOUND');
+    });
+
+    it('emits an error (VALIDATION_ERROR) when thread:join receives a malformed id', async () => {
+      const { user } = await registerUser();
+      const client = await connectAndTrack(signTestToken({ sub: user.id, email: user.email }));
+
+      const errP = waitForEvent(client, SOCKET_EVENTS.ERROR);
+      client.emit(SOCKET_EVENTS.THREAD_JOIN, 'not-a-cuid');
+
+      const [err] = await errP;
+      expect(err.code).toBe('VALIDATION_ERROR');
+    });
+
+    it('dm:join subscribes a participant to a DM started AFTER the socket connected', async () => {
+      // bob connects with NO DMs, so the connect-time auto-join covers none.
+      const alice = await registerUser();
+      const { user: bob } = await registerUser();
+      const bobClient = await connectAndTrack(signTestToken({ sub: bob.id, email: bob.email }));
+
+      // alice starts the DM mid-session; bob's existing socket is NOT auto-joined
+      // because auto-join only runs at connect time (before the DM existed).
+      const dm = await createTestDm({ token: alice.token, targetUserId: bob.id });
+
+      const before = await server.io.in(`dm:${dm.id}`).fetchSockets();
+      expect(before).toHaveLength(0);
+
+      bobClient.emit(SOCKET_EVENTS.DM_JOIN, dm.id);
+      await waitForRoomMembership(server.io, `dm:${dm.id}`, 1);
+
+      bobClient.emit(SOCKET_EVENTS.DM_LEAVE, dm.id);
+      await waitForRoomEmpty(server.io, `dm:${dm.id}`);
+    });
+
+    it('emits an error (FORBIDDEN) and does not join when dm:join targets a DM the caller is not in', async () => {
+      const alice = await registerUser();
+      const { user: bob } = await registerUser();
+      const dm = await createTestDm({ token: alice.token, targetUserId: bob.id });
+
+      const { user: carol } = await registerUser();
+      const carolClient = await connectAndTrack(
+        signTestToken({ sub: carol.id, email: carol.email }),
+      );
+
+      const errP = waitForEvent(carolClient, SOCKET_EVENTS.ERROR);
+      carolClient.emit(SOCKET_EVENTS.DM_JOIN, dm.id);
+
+      const [err] = await errP;
+      expect(err.code).toBe('FORBIDDEN');
+      const sockets = await server.io.in(`dm:${dm.id}`).fetchSockets();
+      expect(sockets).toHaveLength(0);
     });
   });
 

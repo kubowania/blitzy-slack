@@ -56,7 +56,7 @@ export function ChannelListItem({ channel, className }: ChannelListItemProps): R
       size="sm"
       className={cn(
         'cursor-pointer rounded-md px-2 py-1 text-sidebar-foreground',
-        'hover:bg-sidebar-accent/50',
+        'hover:bg-sidebar-hover hover:text-sidebar-hover-foreground',
         isActive && 'bg-sidebar-accent text-sidebar-accent-foreground',
         className,
       )}

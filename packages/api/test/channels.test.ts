@@ -1,9 +1,10 @@
 /**
  * @file packages/api/test/channels.test.ts
  *
- * Jest + supertest integration tests for the channel routes (5 endpoints):
+ * Jest + supertest integration tests for the channel routes (6 endpoints):
  *   - GET    /api/channels
  *   - POST   /api/channels
+ *   - GET    /api/channels/:id
  *   - POST   /api/channels/:id/join
  *   - POST   /api/channels/:id/leave
  *   - GET    /api/channels/:id/messages?cursor=&limit=
@@ -44,7 +45,12 @@
 import request from 'supertest';
 import type { Application } from 'express';
 
-import type { Channel, ChannelMember, ChannelSummary } from '@app/shared/types/channel';
+import type {
+  Channel,
+  ChannelMember,
+  ChannelSummary,
+  ChannelWithMembers,
+} from '@app/shared/types/channel';
 import type { MessageWithAuthor } from '@app/shared/types/message';
 import {
   PAGE_SIZE,
@@ -536,6 +542,112 @@ describe('Channel routes — GET/POST /api/channels, POST /:id/join, POST /:id/l
         .post(`/api/channels/${MISSING_CUID}/leave`)
         .set('Authorization', `Bearer ${token}`)
         .expect(404);
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // GET /api/channels/:id — channel detail (description + hydrated members)
+  //
+  // ACL mirrors GET /:id/messages (permissive read), NOT the stricter
+  // assertChannelAccess: a PUBLIC channel is readable by any authenticated user
+  // (no membership required) while a PRIVATE channel is members-only (403).
+  // -------------------------------------------------------------------------
+  describe('GET /api/channels/:id', () => {
+    it('returns 401 without an Authorization header', async () => {
+      await request(app).get(`/api/channels/${PLACEHOLDER_CUID}`).expect(401);
+    });
+
+    it('returns 400 when the channel id is not a valid cuid', async () => {
+      const { token } = await registerUser();
+      await request(app)
+        .get('/api/channels/not-a-cuid')
+        .set('Authorization', `Bearer ${token}`)
+        .expect(400);
+    });
+
+    it('returns 404 when the channel id is a valid cuid with no matching row', async () => {
+      const { token } = await registerUser();
+      await request(app)
+        .get(`/api/channels/${MISSING_CUID}`)
+        .set('Authorization', `Bearer ${token}`)
+        .expect(404);
+    });
+
+    it('returns the public channel detail with description and hydrated members', async () => {
+      const { token, user } = await registerUser();
+      const channelName = uniqueChannelName();
+      const created = await request(app)
+        .post('/api/channels')
+        .set('Authorization', `Bearer ${token}`)
+        .send({ name: channelName, description: 'a public room', isPrivate: false })
+        .expect(201);
+      const channelId = (created.body as Channel).id;
+
+      const response = await request(app)
+        .get(`/api/channels/${channelId}`)
+        .set('Authorization', `Bearer ${token}`)
+        .expect(200);
+
+      const body = response.body as ChannelWithMembers;
+      expect(body.id).toBe(channelId);
+      expect(body.name).toBe(channelName);
+      expect(body.description).toBe('a public room');
+      expect(body.isPrivate).toBe(false);
+      // The creator is auto-enrolled as the sole member (owner role).
+      expect(body.memberCount).toBe(1);
+      expect(body.members).toHaveLength(1);
+      const [member] = body.members;
+      if (member === undefined) {
+        throw new Error('expected the creator to be enrolled as a member');
+      }
+      expect(member.userId).toBe(user.id);
+      expect(member.role).toBe('owner');
+      expect(member.user.id).toBe(user.id);
+    });
+
+    it('allows any authenticated user to read a PUBLIC channel they have not joined', async () => {
+      const { token: ownerToken } = await registerUser();
+      const channelId = await createChannelReturningId(ownerToken, false);
+
+      const { token: outsiderToken } = await registerUser();
+      const response = await request(app)
+        .get(`/api/channels/${channelId}`)
+        .set('Authorization', `Bearer ${outsiderToken}`)
+        .expect(200);
+
+      expect((response.body as ChannelWithMembers).id).toBe(channelId);
+    });
+
+    it('allows a MEMBER to read a PRIVATE channel detail', async () => {
+      const { token: ownerToken, user: owner } = await registerUser();
+      const channelId = await createChannelReturningId(ownerToken, true);
+
+      const response = await request(app)
+        .get(`/api/channels/${channelId}`)
+        .set('Authorization', `Bearer ${ownerToken}`)
+        .expect(200);
+
+      const body = response.body as ChannelWithMembers;
+      expect(body.isPrivate).toBe(true);
+      const [member] = body.members;
+      if (member === undefined) {
+        throw new Error('expected the owner to be a member of the private channel');
+      }
+      expect(member.userId).toBe(owner.id);
+    });
+
+    it('denies a NON-member reading a PRIVATE channel detail with 403', async () => {
+      const { token: ownerToken } = await registerUser();
+      const channelId = await createChannelReturningId(ownerToken, true);
+
+      const { token: outsiderToken } = await registerUser();
+      const response = await request(app)
+        .get(`/api/channels/${channelId}`)
+        .set('Authorization', `Bearer ${outsiderToken}`)
+        .expect(403);
+
+      const body = response.body as ErrorResponseBody;
+      expect(body.message).toMatch(/(private|forbidden|access)/i);
     });
   });
 

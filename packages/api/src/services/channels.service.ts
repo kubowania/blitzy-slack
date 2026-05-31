@@ -33,6 +33,7 @@
 import { prisma, Prisma } from '@app/db';
 import type {
   Channel as PrismaChannel,
+  ChannelMember as PrismaChannelMember,
   Message as PrismaMessage,
   User as PrismaUser,
   MessageReaction as PrismaMessageReaction,
@@ -43,8 +44,14 @@ import { logger } from '../config/logger.js';
 import { ForbiddenError, NotFoundError, ValidationError } from '../middleware/errors.js';
 
 import { PAGE_SIZE, MAX_PAGE_SIZE } from '@app/shared/constants/limits';
-import type { Channel, ChannelSummary } from '@app/shared/types/channel';
+import type {
+  Channel,
+  ChannelSummary,
+  ChannelWithMembers,
+  ChannelRole,
+} from '@app/shared/types/channel';
 import type { MessageWithAuthor, ReactionSummary } from '@app/shared/types/message';
+import type { PublicUser } from '@app/shared/types/user';
 import type { CreateChannelInput, JoinChannelInput } from '@app/shared/schemas/channel';
 
 /**
@@ -189,6 +196,49 @@ function toChannelSummary(record: PrismaChannel): ChannelSummary {
     id: record.id,
     name: record.name,
     isPrivate: record.isPrivate,
+  };
+}
+
+/**
+ * Project a Prisma `User` onto the peer-facing {@link PublicUser} shape
+ * (id, displayName, avatarUrl) embedded in a channel member row. Excludes
+ * `email`, `passwordHash`, and timestamps so a member listing never leaks
+ * private fields to peers.
+ */
+function toPublicUser(user: PrismaUser): PublicUser {
+  return {
+    id: user.id,
+    displayName: user.displayName,
+    avatarUrl: user.avatarUrl,
+  };
+}
+
+/**
+ * Map a Prisma `Channel` hydrated with its members (each including the member's
+ * `user`) onto the {@link ChannelWithMembers} DTO returned by the channel-detail
+ * endpoint. The base channel fields come from {@link toChannelDto}; each member
+ * is projected to its wire shape with the user reduced to {@link PublicUser} and
+ * the `role` carried through as a {@link ChannelRole}. `memberCount` equals the
+ * number of returned members (the PoC returns the full member list).
+ */
+function toChannelWithMembersDto(
+  record: PrismaChannel & {
+    members: (PrismaChannelMember & { user: PrismaUser })[];
+  },
+): ChannelWithMembers {
+  const members = record.members.map((member) => ({
+    id: member.id,
+    channelId: member.channelId,
+    userId: member.userId,
+    role: member.role as ChannelRole,
+    joinedAt: member.joinedAt.toISOString(),
+    user: toPublicUser(member.user),
+  }));
+
+  return {
+    ...toChannelDto(record),
+    members,
+    memberCount: members.length,
   };
 }
 
@@ -455,6 +505,60 @@ export async function leaveChannel(input: JoinLeaveInput): Promise<void> {
   }
 
   logger.info({ channelId, userId }, 'channels.leave.success');
+}
+
+/**
+ * Fetch a single channel hydrated with its members for the channel-detail view
+ * (`GET /api/channels/:id`), used by the web channel header to render the
+ * channel description and member-count chip.
+ *
+ * Access control mirrors {@link listChannelMessages} (NOT the stricter
+ * membership rule of `assertChannelAccess`): a PUBLIC channel is visible to any
+ * authenticated user — so the header renders for a channel previewed from the
+ * sidebar — while a PRIVATE channel requires the caller to be a member.
+ *
+ * @param channelId - the channel to fetch.
+ * @param userId - the requesting user's id (for the private-channel ACL).
+ * @returns the channel as a {@link ChannelWithMembers} DTO with the full member
+ *          list (member-ascending by join time) and the precomputed member count.
+ * @throws {NotFoundError} when the channel does not exist.
+ * @throws {ForbiddenError} when the channel is private and the caller is not a member.
+ */
+export async function getChannelDetail(
+  channelId: string,
+  userId: string,
+): Promise<ChannelWithMembers> {
+  const channel = await prisma.channel.findUnique({
+    where: { id: channelId },
+    include: {
+      members: {
+        include: { user: true },
+        orderBy: { joinedAt: 'asc' },
+      },
+    },
+  });
+  if (channel === null) {
+    throw new NotFoundError('Channel not found');
+  }
+
+  // ACL mirrors listChannelMessages (NOT the stricter assertChannelAccess
+  // membership rule): a PUBLIC channel is visible to any authenticated user so
+  // its header renders when previewed from the sidebar; a PRIVATE channel
+  // requires the caller to be a member. Membership is checked against the
+  // already-fetched member list to avoid a second query.
+  if (channel.isPrivate) {
+    const isMember = channel.members.some((member) => member.userId === userId);
+    if (!isMember) {
+      throw new ForbiddenError('You do not have access to this channel');
+    }
+  }
+
+  logger.debug(
+    { channelId, userId, memberCount: channel.members.length },
+    'channels.getDetail.success',
+  );
+
+  return toChannelWithMembersDto(channel);
 }
 
 /**

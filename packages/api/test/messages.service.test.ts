@@ -3,7 +3,8 @@
  *
  * Jest service-level (unit) tests for the message service:
  *   - createMessage(input)        → MessageWithAuthor
- *   - listThreadReplies(input)    → { messages, nextCursor }
+ *   - listThreadReplies(input)    → { parent, messages, nextCursor }
+ *   - assertThreadAccess(id, uid) → void (throws on missing/forbidden/contextless)
  *   - addReaction(input)          → MessageWithAuthor
  *   - removeReaction(input)       → MessageWithAuthor
  *
@@ -36,9 +37,14 @@
  *   - createMessage enforces channel/DM XOR, MAX_MESSAGE_LENGTH, content-or-file,
  *     single-level threads with a matching channel/DM context, and self-owned
  *     file attachments — each as a defense-in-depth guard behind the route Zod.
- *   - listThreadReplies reads replies oldest-first, fetches `limit + 1` rows to
- *     compute `nextCursor`, defaults an absent/<1 limit to 50, caps it at 100,
- *     and rejects a malformed cursor with a ValidationError.
+ *   - listThreadReplies hydrates the parent into a `MessageWithAuthor`, reads
+ *     replies oldest-first, fetches `limit + 1` rows to compute `nextCursor`,
+ *     defaults an absent/<1 limit to 50, caps it at 100, and rejects a malformed
+ *     cursor with a ValidationError.
+ *   - assertThreadAccess resolves the parent's channel/DM and delegates to the
+ *     SAME assertChannelAccess / assertDmAccess ACL the REST listing uses,
+ *     throwing NotFoundError (missing parent), ForbiddenError (no access), or
+ *     ValidationError (contextless parent).
  *   - add/removeReaction gate on channel/DM access, are idempotent, and surface
  *     a non-P2025 delete failure unchanged.
  *
@@ -51,10 +57,11 @@
 import {
   createMessage,
   listThreadReplies,
+  assertThreadAccess,
   addReaction,
   removeReaction,
 } from '../src/services/messages.service.js';
-import { ValidationError, NotFoundError } from '../src/middleware/errors.js';
+import { ValidationError, NotFoundError, ForbiddenError } from '../src/middleware/errors.js';
 import { MAX_MESSAGE_LENGTH, MAX_PAGE_SIZE } from '@app/shared/constants/limits';
 import {
   cleanDatabase,
@@ -224,6 +231,11 @@ describe('messages.service — listThreadReplies pagination', () => {
     const { userId, parentId } = await seedChannelThread(3);
 
     const page1 = await listThreadReplies({ parentId, userId, limit: 2 });
+    // The hydrated parent is returned on every page and reports the FULL reply
+    // count (3), independent of the page's `limit`.
+    expect(page1.parent.id).toBe(parentId);
+    expect(page1.parent.content).toBe('thread parent');
+    expect(page1.parent.replyCount).toBe(3);
     expect(page1.messages.map((m) => m.content)).toEqual(['r1', 'r2']);
     expect(page1.nextCursor).not.toBeNull();
 
@@ -278,6 +290,8 @@ describe('messages.service — listThreadReplies access + context', () => {
 
     const result = await listThreadReplies({ parentId: parent.id, userId: alice.user.id });
 
+    expect(result.parent.id).toBe(parent.id);
+    expect(result.parent.content).toBe('dm parent');
     expect(result.messages.map((m) => m.content)).toEqual(['dm reply']);
   });
 
@@ -288,6 +302,69 @@ describe('messages.service — listThreadReplies access + context', () => {
     await expect(
       listThreadReplies({ parentId: orphanId, userId: author.user.id }),
     ).rejects.toBeInstanceOf(ValidationError);
+  });
+});
+
+describe('messages.service — assertThreadAccess', () => {
+  it('resolves for a channel parent when the caller is a member', async () => {
+    const { userId, parentId } = await seedChannelThread(1);
+
+    await expect(assertThreadAccess(parentId, userId)).resolves.toBeUndefined();
+  });
+
+  it('rejects a channel parent when the caller is NOT a member (private channel)', async () => {
+    const owner = await registerUser();
+    const channel = await createTestChannel({ token: owner.token, isPrivate: true });
+    const parent = await prismaTest.message.create({
+      data: { content: 'private parent', authorId: owner.user.id, channelId: channel.id },
+    });
+    const outsider = await registerUser();
+
+    await expect(assertThreadAccess(parent.id, outsider.user.id)).rejects.toBeInstanceOf(
+      ForbiddenError,
+    );
+  });
+
+  it('resolves for a DM parent when the caller is a participant', async () => {
+    const alice = await registerUser();
+    const bob = await registerUser();
+    const dm = await createTestDm({ token: alice.token, targetUserId: bob.user.id });
+    const parent = await prismaTest.message.create({
+      data: { content: 'dm parent', authorId: alice.user.id, dmId: dm.id },
+    });
+
+    await expect(assertThreadAccess(parent.id, bob.user.id)).resolves.toBeUndefined();
+  });
+
+  it('rejects a DM parent when the caller is NOT a participant', async () => {
+    const alice = await registerUser();
+    const bob = await registerUser();
+    const carol = await registerUser();
+    const dm = await createTestDm({ token: alice.token, targetUserId: bob.user.id });
+    const parent = await prismaTest.message.create({
+      data: { content: 'dm parent', authorId: alice.user.id, dmId: dm.id },
+    });
+
+    await expect(assertThreadAccess(parent.id, carol.user.id)).rejects.toBeInstanceOf(
+      ForbiddenError,
+    );
+  });
+
+  it('rejects a parent message that does not exist (404)', async () => {
+    const caller = await registerUser();
+
+    await expect(assertThreadAccess(MISSING_CUID, caller.user.id)).rejects.toBeInstanceOf(
+      NotFoundError,
+    );
+  });
+
+  it('rejects a parent that has neither a channel nor a DM context', async () => {
+    const author = await registerUser();
+    const orphanId = await createContextlessMessage(author.user.id);
+
+    await expect(assertThreadAccess(orphanId, author.user.id)).rejects.toBeInstanceOf(
+      ValidationError,
+    );
   });
 });
 

@@ -56,7 +56,7 @@ import {
 } from '@app/shared/constants/events';
 import { sendMessageSchema } from '@app/shared/schemas/message';
 import type { SendMessageInput } from '@app/shared/schemas/message';
-import type { MessageWithAuthor, ReactionSummary } from '@app/shared/types/message';
+import type { MessageWithAuthor, ReactionSummary, Thread } from '@app/shared/types/message';
 import type {
   ClientToServerEvents,
   InterServerEvents,
@@ -234,17 +234,20 @@ router.get(
   validate({ params: messageIdParamsSchema }),
   async (
     req: Request<{ id: string }>,
-    res: Response<MessageWithAuthor[]>,
+    res: Response<Thread>,
   ): Promise<void> => {
     const userId = req.user!.id;
     const parentId = req.params.id;
 
-    // The service enforces ACL on the parent's channel/DM and returns replies
-    // oldest-first. Thread sizes are bounded in the PoC, so the first page is
-    // returned as the reply list (no pagination cursor surfaced here).
-    const { messages } = await listThreadReplies({ parentId, userId });
+    // The service enforces ACL on the parent's channel/DM and returns the
+    // hydrated parent plus replies oldest-first. The response envelope is the
+    // shared `Thread` shape ({ parent, replies }) so the web thread panel can
+    // render the thread root and its replies from a single request. Thread
+    // sizes are bounded in the PoC, so the first page is returned as the reply
+    // list (no pagination cursor surfaced here).
+    const { parent, messages } = await listThreadReplies({ parentId, userId });
 
-    res.status(200).json(messages);
+    res.status(200).json({ parent, replies: messages });
   },
 );
 

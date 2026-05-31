@@ -72,7 +72,7 @@ export function DmListItem({
       data-active={isActive ? 'true' : 'false'}
       size="sm"
       className={cn(
-        'rounded-md text-sidebar-foreground hover:bg-sidebar-accent/50',
+        'rounded-md text-sidebar-foreground hover:bg-sidebar-hover hover:text-sidebar-hover-foreground',
         isActive && 'bg-sidebar-accent text-sidebar-accent-foreground',
         className,
       )}

@@ -28,8 +28,9 @@
  * Behavioral contract (verified against the implemented route/service, NOT the
  * assigned-file prompt's illustrative sketch — see /docs/decision-log.md):
  *   - POST /api/messages returns 201 with a hydrated `MessageWithAuthor`.
- *   - GET /:id/replies returns 200 with a BARE `MessageWithAuthor[]` array
- *     (not a `{ replies }` envelope).
+ *   - GET /:id/replies returns 200 with the shared `Thread` envelope
+ *     `{ parent, replies }` — the hydrated parent message plus the
+ *     oldest-first reply list (each a hydrated `MessageWithAuthor`).
  *   - POST /:id/reactions and DELETE /:id/reactions/:emoji return the FULL
  *     post-mutation `MessageWithAuthor` (the `{ messageId, reaction }` and
  *     `{ messageId, emoji, userId }` shapes are the Socket.io payloads, asserted
@@ -43,7 +44,12 @@
 import request from 'supertest';
 import type { Application } from 'express';
 
-import type { Message, MessageWithAuthor, ReactionSummary } from '@app/shared/types/message';
+import type {
+  Message,
+  MessageWithAuthor,
+  ReactionSummary,
+  Thread,
+} from '@app/shared/types/message';
 import { MAX_MESSAGE_LENGTH, MAX_EMOJI_LENGTH } from '@app/shared/constants/limits';
 
 import {
@@ -526,7 +532,7 @@ describe('Message routes — POST /api/messages, GET /:id/replies, POST/DELETE /
       await request(app).get(`/api/messages/${PLACEHOLDER_CUID}/replies`).expect(401);
     });
 
-    it('returns an empty array when the parent has no replies', async () => {
+    it('returns the hydrated parent and an empty reply list when the parent has no replies', async () => {
       const { token } = await registerUser();
       const channel = await createTestChannel({ token, isPrivate: false });
       const parentResponse = await request(app)
@@ -541,9 +547,12 @@ describe('Message routes — POST /api/messages, GET /:id/replies, POST/DELETE /
         .set('Authorization', `Bearer ${token}`)
         .expect(200);
 
-      const replies = response.body as MessageWithAuthor[];
-      expect(Array.isArray(replies)).toBe(true);
-      expect(replies).toHaveLength(0);
+      const thread = response.body as Thread;
+      expect(thread.parent.id).toBe(parentId);
+      expect(thread.parent.content).toBe('parent');
+      expect(thread.parent.replyCount).toBe(0);
+      expect(Array.isArray(thread.replies)).toBe(true);
+      expect(thread.replies).toHaveLength(0);
     });
 
     it('returns thread replies in chronological order (oldest first)', async () => {
@@ -571,9 +580,11 @@ describe('Message routes — POST /api/messages, GET /:id/replies, POST/DELETE /
         .set('Authorization', `Bearer ${token}`)
         .expect(200);
 
-      const replies = response.body as MessageWithAuthor[];
-      expect(replies).toHaveLength(3);
-      expect(replies.map((reply) => reply.content)).toEqual(['first', 'second', 'third']);
+      const thread = response.body as Thread;
+      expect(thread.parent.id).toBe(parentId);
+      expect(thread.parent.replyCount).toBe(3);
+      expect(thread.replies).toHaveLength(3);
+      expect(thread.replies.map((reply) => reply.content)).toEqual(['first', 'second', 'third']);
     });
 
     it('returns 404 for an unknown parent message id', async () => {

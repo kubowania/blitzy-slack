@@ -99,10 +99,13 @@ export interface ListThreadRepliesInput {
 }
 
 /**
- * Result of {@link listThreadReplies}: the page of replies (oldest-first) and
- * the cursor to fetch the next, newer page (or `null` when exhausted).
+ * Result of {@link listThreadReplies}: the fully-hydrated parent message, the
+ * page of replies (oldest-first), and the cursor to fetch the next, newer page
+ * (or `null` when exhausted).
  */
 export interface ListThreadRepliesResult {
+  /** The fully-hydrated parent (thread-root) message the replies belong to. */
+  parent: MessageWithAuthor;
   /** The page of thread replies, oldest-first (chronological reading order). */
   messages: MessageWithAuthor[];
   /** Opaque cursor for the next page, or `null` when there are no more replies. */
@@ -330,6 +333,41 @@ export async function assertDmAccess(dmId: string, userId: string): Promise<void
 }
 
 /**
+ * Verify the caller may observe the thread rooted at the given parent message.
+ *
+ * Thread access derives entirely from the parent's containing channel/DM: a
+ * caller who can read the parent's channel or DM can subscribe to its thread.
+ * The check therefore resolves the parent's container and delegates to the
+ * SAME {@link assertChannelAccess} / {@link assertDmAccess} ACL used by the
+ * HTTP thread-reply listing, so the realtime `thread:join` subscription cannot
+ * grant access the REST path would deny.
+ *
+ * Exported so the Socket.io subscription handler can authorize a `thread:join`
+ * before subscribing the live socket to the `thread:<parentId>` room.
+ *
+ * @throws {NotFoundError} when the parent message does not exist.
+ * @throws {ForbiddenError} when the caller lacks access to the parent's channel/DM.
+ * @throws {ValidationError} when the parent has neither a channel nor a DM
+ *   context (a defensive guard against a corrupted row).
+ */
+export async function assertThreadAccess(parentId: string, userId: string): Promise<void> {
+  const parent = await prisma.message.findUnique({
+    where: { id: parentId },
+    select: { id: true, channelId: true, dmId: true },
+  });
+  if (parent === null) {
+    throw new NotFoundError('Parent message not found');
+  }
+  if (parent.channelId !== null) {
+    await assertChannelAccess(parent.channelId, userId);
+  } else if (parent.dmId !== null) {
+    await assertDmAccess(parent.dmId, userId);
+  } else {
+    throw new ValidationError('Parent message has no channel or DM context');
+  }
+}
+
+/**
  * Send a new message to either a channel or a DM (XOR), optionally as a thread
  * reply (`parentId`), optionally carrying a single file attachment (`fileId`).
  *
@@ -487,9 +525,17 @@ export async function listThreadReplies(
   const { parentId, userId, cursor } = input;
   const limit = resolveReplyLimit(input.limit);
 
+  // The parent is fully hydrated (author, reactions, file, reply count) because
+  // the thread response returns it alongside the replies so the panel can
+  // render the thread root without a second round trip.
   const parent = await prisma.message.findUnique({
     where: { id: parentId },
-    select: { id: true, channelId: true, dmId: true },
+    include: {
+      author: true,
+      reactions: true,
+      file: true,
+      _count: { select: { replies: true } },
+    },
   });
   if (parent === null) {
     throw new NotFoundError('Parent message not found');
@@ -503,6 +549,8 @@ export async function listThreadReplies(
   } else {
     throw new ValidationError('Parent message has no channel or DM context');
   }
+
+  const parentDto = toMessageDto(parent, userId);
 
   const decodedCursor = cursor === undefined ? null : decodeReplyCursor(cursor);
   if (cursor !== undefined && decodedCursor === null) {
@@ -554,7 +602,7 @@ export async function listThreadReplies(
     'messages.listThreadReplies.success',
   );
 
-  return { messages, nextCursor };
+  return { parent: parentDto, messages, nextCursor };
 }
 
 /**

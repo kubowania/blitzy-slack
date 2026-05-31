@@ -3,6 +3,7 @@
  *
  * GET    /api/channels                              — list channels visible to the user
  * POST   /api/channels                              — create a new channel
+ * GET    /api/channels/:id                          — channel detail (members + description)
  * POST   /api/channels/:id/join                     — add the current user to a channel
  * POST   /api/channels/:id/leave                    — remove the current user from a channel
  * GET    /api/channels/:id/messages?cursor=&limit=  — paginated channel message history
@@ -35,7 +36,7 @@ import { z } from 'zod';
 
 import { createChannelSchema } from '@app/shared/schemas/channel';
 import type { CreateChannelInput } from '@app/shared/schemas/channel';
-import type { Channel, ChannelSummary } from '@app/shared/types/channel';
+import type { Channel, ChannelSummary, ChannelWithMembers } from '@app/shared/types/channel';
 import type { MessageWithAuthor } from '@app/shared/types/message';
 import { MAX_PAGE_SIZE, PAGE_SIZE } from '@app/shared/constants/limits';
 
@@ -43,6 +44,7 @@ import { requireAuth } from '../middleware/auth.js';
 import { validate } from '../middleware/validate.js';
 import {
   createChannel,
+  getChannelDetail,
   joinChannel,
   leaveChannel,
   listChannelMessages,
@@ -163,6 +165,23 @@ router.post(
     );
 
     res.status(200).json({ ok: true });
+  },
+);
+
+router.get(
+  '/:id',
+  requireAuth,
+  validate({ params: channelIdParamsSchema }),
+  async (req: Request<{ id: string }>, res: Response<ChannelWithMembers>): Promise<void> => {
+    const userId = req.user!.id;
+    const channelId = req.params.id;
+
+    // The service enforces the channel-detail ACL (public → any authenticated
+    // user; private → member only) and hydrates the member list. NotFoundError /
+    // ForbiddenError propagate to the centralized error handler.
+    const channel = await getChannelDetail(channelId, userId);
+
+    res.status(200).json(channel);
   },
 );
 

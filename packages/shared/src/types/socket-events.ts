@@ -47,6 +47,10 @@
 import type {
   CHANNEL_JOIN,
   CHANNEL_LEAVE,
+  DM_JOIN,
+  DM_LEAVE,
+  THREAD_JOIN,
+  THREAD_LEAVE,
   MESSAGE_SEND,
   REACTION_ADD,
   REACTION_REMOVE,
@@ -82,6 +86,46 @@ export interface ClientToServerEvents {
    * @param ack - Acknowledgement: `true` on success.
    */
   [CHANNEL_LEAVE]: (channelId: string, ack: (ok: boolean) => void) => void;
+
+  /**
+   * Subscribe the socket to a direct-message room (`dm:<id>`).
+   *
+   * Fire-and-forget: unlike `channel:join`, a DM has no durable membership to
+   * create — both participants are fixed at DM creation — so this purely
+   * subscribes the LIVE socket to the broadcast room. It exists because the
+   * connection-time auto-join only covers DMs that existed when the socket
+   * connected; a DM started mid-session needs the open DM view to subscribe
+   * its socket so `message:new` / `typing:*` broadcasts arrive without a
+   * reconnect. The server enforces the participant ACL and emits `error` on
+   * failure.
+   * @param dmId - The direct-message conversation to subscribe to.
+   */
+  [DM_JOIN]: (dmId: string) => void;
+
+  /**
+   * Unsubscribe the socket from a direct-message room. Fire-and-forget.
+   * @param dmId - The direct-message conversation to unsubscribe from.
+   */
+  [DM_LEAVE]: (dmId: string) => void;
+
+  /**
+   * Subscribe the socket to a thread room (`thread:<parentId>`).
+   *
+   * Fire-and-forget. Thread rooms are NOT auto-joined at connect time — they
+   * are scoped to an open thread panel — so the panel subscribes on open and
+   * unsubscribes on close. Without this, thread-reply broadcasts (including
+   * reactions on replies, which target ONLY the thread room) never reach an
+   * open panel. The server enforces the parent's channel/DM ACL and emits
+   * `error` on failure.
+   * @param parentId - The parent (thread-root) message to subscribe to.
+   */
+  [THREAD_JOIN]: (parentId: string) => void;
+
+  /**
+   * Unsubscribe the socket from a thread room. Fire-and-forget.
+   * @param parentId - The parent (thread-root) message to unsubscribe from.
+   */
+  [THREAD_LEAVE]: (parentId: string) => void;
 
   /**
    * Send a new message into a channel, DM, or thread.

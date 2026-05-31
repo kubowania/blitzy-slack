@@ -14,8 +14,8 @@
  *     connection authenticates before any connection handler fires.
  *   - On each authenticated connection: auto-join the owner's `user:<id>` room
  *     and every authorized channel/DM room, register the channel / message /
- *     presence / reaction / typing handler families, and install the disconnect
- *     handler.
+ *     presence / reaction / subscription / typing handler families, and install
+ *     the disconnect handler.
  *   - On disconnect: clear the Redis-backed presence state ONLY when the
  *     disconnecting socket was the user's last live socket (multi-tab safety),
  *     then fan an `offline` presence:update out to the user's peers.
@@ -38,6 +38,7 @@ import { registerChannelHandlers } from './handlers/channel.handler.js';
 import { registerMessageHandlers } from './handlers/message.handler.js';
 import { registerPresenceHandlers } from './handlers/presence.handler.js';
 import { registerReactionHandlers } from './handlers/reaction.handler.js';
+import { registerSubscriptionHandlers } from './handlers/subscription.handler.js';
 import { registerTypingHandlers } from './handlers/typing.handler.js';
 import { broadcastPresenceUpdate } from './presence-broadcast.js';
 import { channelRoom, dmRoom, userRoom } from './rooms.js';
@@ -70,7 +71,8 @@ type AppSocket = Socket<ClientToServerEvents, ServerToClientEvents, InterServerE
  *
  * Thread rooms (`thread:<parentId>`) are intentionally NOT auto-joined here:
  * they are scoped to an open thread panel and are joined/left on demand by the
- * channel handler's room lifecycle, not at connect time.
+ * subscription handler's `thread:join` / `thread:leave` lifecycle
+ * (`handlers/subscription.handler.ts`), not at connect time.
  *
  * The function resolves once all joins have been issued. Errors (e.g. a Redis
  * blip while resolving membership) are caught and logged rather than thrown, so
@@ -176,6 +178,7 @@ export function registerSocketHandlers(io: AppServer): void {
     registerMessageHandlers(io, socket);
     registerPresenceHandlers(io, socket);
     registerReactionHandlers(io, socket);
+    registerSubscriptionHandlers(socket);
     registerTypingHandlers(socket);
 
     socket.on('disconnect', (reason) => {

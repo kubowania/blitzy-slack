@@ -1,5 +1,5 @@
 import * as React from 'react';
-import { useNavigate } from 'react-router';
+import { useLocation, useNavigate } from 'react-router';
 import { MessageCircle } from 'lucide-react';
 import { format, formatDistanceToNow } from 'date-fns';
 
@@ -97,13 +97,16 @@ export function MessageItem({
   className,
 }: MessageItemProps): React.JSX.Element {
   const navigate = useNavigate();
+  const location = useLocation();
   const { display, full, relative } = formatTimestamp(message.createdAt);
 
   // `void` discards the (possibly Promise) return of React Router 7's
-  // `navigate`, satisfying the no-floating-promises lint rule.
+  // `navigate`, satisfying the no-floating-promises lint rule. The current
+  // channel/DM location is passed as `state.background` so the router renders
+  // the thread as a Sheet over this conversation rather than replacing it.
   const handleOpenThread = React.useCallback(() => {
-    void navigate(`/app/threads/${message.id}`);
-  }, [navigate, message.id]);
+    void navigate(`/app/threads/${message.id}`, { state: { background: location } });
+  }, [navigate, location, message.id]);
 
   const hasReactions = message.reactions.length > 0;
   const hasReplies = !hideThreadActions && message.replyCount > 0;

@@ -1,43 +1,76 @@
 /**
- * App — the view-tree root of the Blitzy Slack web client (`@app/web`).
+ * App — the provider-tree root and view-tree root of the Blitzy Slack web
+ * client (`@app/web`). Rendered once by `src/main.tsx` inside `StrictMode`.
  *
- * Rendered by `src/main.tsx` inside the bootstrap provider tree
- * (`StrictMode` → `QueryClientProvider` → `BrowserRouter`). This component
- * contributes the application's view tree together with the global UI overlays
- * that are not bound to any single route:
+ * App owns every application-wide context and global overlay:
  *
- *   - {@link Router} (`./router`) declares the full client-side route tree —
- *     Landing, Login, Register, and the authenticated `/app` workspace shell
- *     with its nested Channel / DirectMessage / Thread / SearchResults routes.
- *   - The Sonner `<Toaster />` is the global rendering surface for toast
- *     notifications (file-upload progress, error feedback, disconnect banners,
- *     success confirmations) emitted via `toast()` from anywhere in the tree.
- *
- * The `<Toaster />` is a sibling of {@link Router}, not a descendant: Sonner
- * renders it as a single fixed-position overlay region and `toast()` dispatches
- * to it through a module-level observer, so mounting it exactly once here at the
- * app root makes it reachable from every route and keeps it stable across route
- * changes. Bootstrap providers (`StrictMode`, `BrowserRouter`,
- * `QueryClientProvider`) live in `main.tsx` and the route declarations live in
- * `router.tsx`; this file owns only the view tree and the global overlays.
+ *   - {@link QueryClientProvider} with a single configured {@link QueryClient}
+ *     (module-scoped so it is created exactly once and survives re-renders).
+ *   - {@link BrowserRouter} — the History router provider that the route tree in
+ *     {@link Router} declares its `<Routes>` against.
+ *   - {@link AuthBootstrap} — validates a persisted session once on mount.
+ *   - {@link Router} (`./router`) — the full client-side route tree.
+ *   - {@link Toaster} (the shadcn wrapper at `@/components/ui/sonner`) — the
+ *     single global toast surface; mounting it once here keeps it reachable from
+ *     every route and stable across navigation.
  *
  * Per the Explainability rule (AAP §0.8.3), design rationale lives in
  * /docs/decision-log.md, not in these comments.
  */
-import { Toaster } from 'sonner';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { BrowserRouter } from 'react-router';
+
+import { Toaster } from '@/components/ui/sonner';
+import { useMe } from '@/hooks/useAuth';
 
 import { Router } from './router';
 
 /**
- * Application top-level view component — see the module docblock for the full
- * composition contract. Renders the route tree alongside the global toast
- * overlay and takes no props.
+ * The application's single TanStack Query client. Created at module scope so it
+ * is instantiated exactly once for the lifetime of the page (a client created
+ * inside the component would be discarded and rebuilt on every re-render,
+ * dropping the cache). Defaults tune the cache for this realtime app: a short
+ * `staleTime` so list/timeline reads are reused across quick navigations, a
+ * single retry to ride out a transient network blip without hammering the API,
+ * and `refetchOnWindowFocus` disabled because Socket.io — not focus polling —
+ * is the authoritative freshness mechanism (Rule 2).
+ */
+const queryClient = new QueryClient({
+  defaultOptions: {
+    queries: {
+      staleTime: 30_000,
+      retry: 1,
+      refetchOnWindowFocus: false,
+    },
+  },
+});
+
+/**
+ * Renders nothing; its sole job is to mount {@link useMe} exactly once so a
+ * session restored from `localStorage` is re-verified against `GET /api/auth/me`
+ * on app load. A still-valid token refreshes the stored identity; an expired or
+ * invalid token yields a 401 that the shared `api-client` interceptor turns into
+ * a full `performLogout()`, clearing the auth store so the route guards redirect
+ * to `/login`. Sits inside {@link QueryClientProvider} because `useMe` is a
+ * TanStack Query hook.
+ */
+function AuthBootstrap(): null {
+  useMe();
+  return null;
+}
+
+/**
+ * Application root — see the module docblock for the full composition contract.
+ * Takes no props.
  */
 export function App() {
   return (
-    <>
-      <Router />
-      <Toaster position="top-right" richColors closeButton />
-    </>
+    <QueryClientProvider client={queryClient}>
+      <BrowserRouter>
+        <AuthBootstrap />
+        <Router />
+        <Toaster position="top-right" richColors closeButton />
+      </BrowserRouter>
+    </QueryClientProvider>
   );
 }

@@ -172,3 +172,88 @@ export const searchQuerySchema = z
  * Inferred TypeScript type for the validated search-query payload.
  */
 export type SearchQueryInput = z.infer<typeof searchQuerySchema>;
+
+// ===========================================================================
+// Response validation schemas
+// ===========================================================================
+// Runtime validators for the hydrated RESPONSE shapes the API returns and the
+// web client consumes. Unlike the request schemas above (which reject unknown
+// keys via `.strict()`), these are PERMISSIVE: Zod's default strips unknown
+// keys rather than rejecting them, so an additive future server field never
+// breaks an older client. Each schema's `z.infer` mirrors the corresponding
+// DTO interface in ../types/message.ts and ../types/user.ts, so a parsed value
+// is assignable to the DTO without a cast.
+
+/**
+ * Validates a {@link PublicUser} embedded as a message author (the peer-facing
+ * projection: id, displayName, nullable avatarUrl — never email).
+ */
+export const publicUserSchema = z.object({
+  id: z.string(),
+  displayName: z.string(),
+  avatarUrl: z.string().nullable(),
+});
+
+/**
+ * Validates an aggregated reaction summary chip ({@link ReactionSummary}).
+ */
+export const reactionSummarySchema = z.object({
+  emoji: z.string(),
+  count: z.number(),
+  userIds: z.array(z.string()),
+  hasCurrentUser: z.boolean(),
+});
+
+/**
+ * Validates a single file attachment ({@link FileAttachment}) carried by a
+ * message, including the server-computed public download `url`.
+ */
+export const fileAttachmentSchema = z.object({
+  id: z.string(),
+  originalName: z.string(),
+  storedName: z.string(),
+  mimeType: z.string(),
+  sizeBytes: z.number(),
+  uploadedById: z.string().nullable(),
+  createdAt: z.string(),
+  url: z.string(),
+});
+
+/**
+ * Validates a fully-hydrated message ({@link MessageWithAuthor}) as returned by
+ * the message timeline, the thread endpoint, and the `message:new` broadcast.
+ */
+export const messageWithAuthorSchema = z.object({
+  id: z.string(),
+  content: z.string(),
+  authorId: z.string(),
+  author: publicUserSchema,
+  channelId: z.string().nullable(),
+  dmId: z.string().nullable(),
+  parentId: z.string().nullable(),
+  fileId: z.string().nullable(),
+  file: fileAttachmentSchema.nullable(),
+  reactions: z.array(reactionSummarySchema),
+  replyCount: z.number(),
+  createdAt: z.string(),
+  updatedAt: z.string(),
+});
+
+/**
+ * Validates the {@link Thread} payload returned by
+ * `GET /api/messages/:id/replies`: the hydrated parent plus the ordered
+ * (oldest-first) reply list. The web thread panel parses the raw response
+ * through this schema so any server/client shape drift surfaces as a thrown
+ * `ZodError` at the fetch boundary instead of a silent runtime crash deep in
+ * the render tree.
+ */
+export const threadResponseSchema = z.object({
+  parent: messageWithAuthorSchema,
+  replies: z.array(messageWithAuthorSchema),
+});
+
+/**
+ * Inferred TypeScript type for the validated thread response. Structurally
+ * equals the {@link Thread} DTO so a parsed value is assignable without a cast.
+ */
+export type ThreadResponse = z.infer<typeof threadResponseSchema>;

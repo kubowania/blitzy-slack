@@ -30,6 +30,18 @@ export const CHANNEL_JOIN = 'channel:join' as const;
 /** Client requests to leave a channel room. */
 export const CHANNEL_LEAVE = 'channel:leave' as const;
 
+/** Client requests to subscribe the live socket to a DM room (`dm:<id>`). */
+export const DM_JOIN = 'dm:join' as const;
+
+/** Client requests to unsubscribe the live socket from a DM room. */
+export const DM_LEAVE = 'dm:leave' as const;
+
+/** Client requests to subscribe the live socket to a thread room (`thread:<parentId>`). */
+export const THREAD_JOIN = 'thread:join' as const;
+
+/** Client requests to unsubscribe the live socket from a thread room. */
+export const THREAD_LEAVE = 'thread:leave' as const;
+
 /** Client sends a new message (channel or DM). */
 export const MESSAGE_SEND = 'message:send' as const;
 
@@ -94,6 +106,10 @@ export const ERROR = 'error' as const;
 export const SOCKET_EVENTS = {
   CHANNEL_JOIN,
   CHANNEL_LEAVE,
+  DM_JOIN,
+  DM_LEAVE,
+  THREAD_JOIN,
+  THREAD_LEAVE,
   MESSAGE_SEND,
   MESSAGE_NEW,
   MESSAGE_UPDATED,

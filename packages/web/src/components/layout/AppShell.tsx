@@ -25,6 +25,16 @@ import { cn } from '@/lib/utils';
  * only the inner scroll regions (the sidebar lists, the message timeline)
  * scroll. `min-w-0` on the content column lets long unbroken content (such as a
  * URL in a message) shrink instead of widening the layout past the viewport.
+ * The three-column structure is a desktop-only layout (the reference Slack web
+ * screenshots are desktop captures); it does not collapse at small breakpoints.
+ *
+ * A visually-hidden "Skip to main content" link is the first focusable element,
+ * letting keyboard and screen-reader users jump past the nav rail and sidebar
+ * straight to the `<main>` landmark (`id="main-content"`, `tabIndex={-1}`).
+ *
+ * The right-hand thread Sheet is NOT rendered here: it is a shell-level route
+ * overlay owned by `router.tsx` (`ThreadOverlay`), which keeps the underlying
+ * channel/DM mounted in this shell's `<Outlet />` behind the panel.
  *
  * The shell is the single mount point for two app-wide lifecycle hooks that
  * belong only in an authenticated context: {@link useConnectSocket} drives the
@@ -44,11 +54,21 @@ export function AppShell({ className, ...props }: React.ComponentProps<'div'>) {
       className={cn('flex h-screen overflow-hidden bg-background text-foreground', className)}
       {...props}
     >
+      <a
+        href="#main-content"
+        className="sr-only focus:not-sr-only focus:absolute focus:left-4 focus:top-3 focus:z-50 focus:rounded-md focus:bg-background focus:px-3 focus:py-2 focus:text-sm focus:font-medium focus:text-foreground focus:shadow-md focus:outline-none focus:ring-2 focus:ring-ring"
+      >
+        Skip to main content
+      </a>
       <WorkspaceNavRail />
       <Sidebar />
       <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
         <Header />
-        <main className="flex-1 overflow-hidden bg-background">
+        <main
+          id="main-content"
+          tabIndex={-1}
+          className="flex-1 overflow-hidden bg-background outline-none"
+        >
           <Outlet />
         </main>
       </div>

@@ -3,10 +3,11 @@ import {
   useQuery,
   useQueryClient,
   type UseMutationResult,
+  type UseQueryResult,
 } from '@tanstack/react-query';
 
 import type { CreateChannelInput } from '@app/shared/schemas/channel';
-import type { Channel, ChannelSummary } from '@app/shared/types/channel';
+import type { Channel, ChannelSummary, ChannelWithMembers } from '@app/shared/types/channel';
 
 import { apiClient, type ApiError } from '@/lib/api-client';
 import { useAuthStore } from '@/stores/auth.store';
@@ -81,6 +82,51 @@ export function useChannels(): UseChannelsResult {
       await query.refetch();
     },
   };
+}
+
+/**
+ * TanStack Query cache-key factory for a single channel's hydrated detail.
+ *
+ * Keyed `['channels', channelId]` — namespaced under the same `'channels'` root
+ * as {@link CHANNELS_QUERY_KEY} but distinguished by the id segment, so a detail
+ * fetch never collides with (or overwrites) the channel-list cache. Exported so
+ * callers can target the exact entry for invalidation.
+ */
+export const CHANNEL_DETAIL_QUERY_KEY = (channelId: string) => ['channels', channelId] as const;
+
+/**
+ * TanStack Query wrapper that fetches a single channel's hydrated detail from
+ * `GET /api/channels/:id` and returns the {@link ChannelWithMembers} shape (base
+ * channel fields plus the member list and the precomputed `memberCount`).
+ *
+ * Behavior:
+ * - Auth- and param-gated: the query is `enabled` only when the auth store holds
+ *   a non-null `token` AND a `channelId` is provided. A logged-out caller or an
+ *   absent route param yields `undefined` data with `isLoading: false` and fires
+ *   no network request.
+ * - Cache key: {@link CHANNEL_DETAIL_QUERY_KEY} (`['channels', channelId]`),
+ *   distinct from the `['channels']` list key so the two never overwrite each
+ *   other.
+ * - Response type is `ChannelWithMembers`, matching the backend contract for the
+ *   channel-detail endpoint (the only channel endpoint that returns the member
+ *   list and `memberCount`). The bearer token is attached automatically by
+ *   `apiClient`, so the `queryFn` only needs the path.
+ *
+ * The backend enforces the channel-detail ACL (public → any authenticated user;
+ * private → member only); a `403`/`404` surfaces through the returned query's
+ * `error`, which the channel page renders as a not-found Empty state.
+ */
+export function useChannel(
+  channelId: string | undefined,
+): UseQueryResult<ChannelWithMembers, Error> {
+  const token = useAuthStore((s) => s.token);
+
+  return useQuery<ChannelWithMembers, Error>({
+    queryKey: CHANNEL_DETAIL_QUERY_KEY(channelId ?? ''),
+    queryFn: () =>
+      apiClient.get<ChannelWithMembers>(`/api/channels/${encodeURIComponent(channelId ?? '')}`),
+    enabled: token !== null && channelId !== undefined,
+  });
 }
 
 /**
