@@ -4,7 +4,7 @@ import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { Lock, MoreVertical } from 'lucide-react';
 import { toast } from 'sonner';
 
-import type { ChannelWithMembers } from '@app/shared/types/channel';
+import type { ChannelSummary } from '@app/shared/types/channel';
 
 import { Button } from '@/components/ui/button';
 import {
@@ -28,8 +28,8 @@ import { cn } from '@/lib/utils';
  * Props for {@link ChannelHeader}.
  */
 export interface ChannelHeaderProps {
-  /** Full channel record including the member list and the precomputed member count. */
-  channel: ChannelWithMembers;
+  /** Channel summary (id, name, public/private flag) used to render the header. */
+  channel: ChannelSummary;
   /** Optional className passthrough merged onto the root `<header>` element. */
   className?: string;
 }
@@ -41,8 +41,7 @@ export interface ChannelHeaderProps {
  * Layout (left to right):
  *  - A `#` text prefix for public channels, or a {@link Lock} icon for private
  *    channels, followed by the channel name as the page's primary `<h1>`.
- *  - An optional one-line channel description below the name when present.
- *  - A member-count chip and an overflow ("kebab") menu on the trailing edge.
+ *  - An overflow ("kebab") menu on the trailing edge.
  *
  * The overflow {@link DropdownMenu} exposes a destructive "Leave channel"
  * action. Selecting it opens a controlled confirmation {@link Dialog}; on
@@ -54,8 +53,7 @@ export interface ChannelHeaderProps {
  *
  * Both icons and the `#` glyph are marked `aria-hidden`; a visually hidden
  * `sr-only` span announces the channel's public/private state to assistive
- * technology. The member-count chip renders as a `ghost` {@link Button} for
- * visual affordance and exposes an accessible name via `aria-label`.
+ * technology.
  */
 export function ChannelHeader({ channel, className }: ChannelHeaderProps): React.JSX.Element {
   const navigate = useNavigate();
@@ -104,22 +102,9 @@ export function ChannelHeader({ channel, className }: ChannelHeaderProps): React
             {channel.isPrivate ? 'private channel' : 'public channel'}
           </span>
         </div>
-        {channel.description !== null && channel.description.length > 0 ? (
-          <p className="truncate text-xs text-muted-foreground">{channel.description}</p>
-        ) : null}
       </div>
 
       <div className="flex shrink-0 items-center gap-2">
-        <Button
-          type="button"
-          variant="ghost"
-          size="sm"
-          className="text-muted-foreground"
-          aria-label={`${channel.memberCount} ${channel.memberCount === 1 ? 'member' : 'members'}`}
-        >
-          {channel.memberCount} {channel.memberCount === 1 ? 'member' : 'members'}
-        </Button>
-
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
             <Button type="button" variant="ghost" size="icon" aria-label="Channel options">
