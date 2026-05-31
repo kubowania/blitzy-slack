@@ -104,6 +104,14 @@ const config: Config = {
   // Per-test time budget (15s).
   testTimeout: 15_000,
 
+  // Serial execution (single worker). The integration suites share one
+  // Postgres database, and test/setup.ts's cleanDatabase() truncates every
+  // table in each beforeEach hook; concurrent workers would wipe one another's
+  // in-flight rows, producing nondeterministic cross-suite failures. Forcing a
+  // single worker here makes the canonical `make test` deterministic regardless
+  // of invocation. Rationale, alternatives, and risks: /docs/decision-log.md.
+  maxWorkers: 1,
+
   // Reporter verbosity and failure behaviour.
   verbose: false,
   bail: false,
