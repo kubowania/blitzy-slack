@@ -9,8 +9,10 @@ import type { Config } from 'jest';
  *                 `.ts` files as ES modules.
  * rootDir       : `.` - this file lives at the package root, so `<rootDir>/src`
  *                 is the source tree and `<rootDir>/test` holds the test suites.
- * Setup         : `<rootDir>/test/setup.ts` runs before each suite to establish
- *                 deterministic test-environment variables.
+ * Setup         : `<rootDir>/test/setup.ts` is the shared test-infrastructure
+ *                 helper module, imported explicitly by the integration suites
+ *                 (not a global `setupFiles` env-seeder). Env values come from
+ *                 the package `.env` and Jest's default `NODE_ENV='test'`.
  * Coverage      : `collectCoverageFrom` targets the `src/services` layer; the
  *                 global `coverageThreshold` enforces the line-coverage floor.
  */
@@ -27,8 +29,14 @@ const config: Config = {
   // Treat `.ts` modules as ESM so import/export syntax is preserved.
   extensionsToTreatAsEsm: ['.ts'],
 
-  // Establish test-environment variables before any suite module is imported.
-  setupFiles: ['<rootDir>/test/setup.ts'],
+  // No `setupFiles` entry: `test/setup.ts` is the shared test-infrastructure
+  // helper module (imported explicitly by integration suites via `./setup.js`),
+  // NOT a global env-seeder. Loading it eagerly would open Redis connections
+  // for every worker (config/redis.ts uses `lazyConnect: false`), leaving open
+  // handles in suites that do not call `closeTestResources()`. Test-environment
+  // variables come from the package `.env` (loaded by config/env.ts via dotenv)
+  // plus Jest's own default `NODE_ENV='test'`.
+  setupFiles: [],
 
   // Discover suites only within the test/ folder; only files ending in `.test.ts`.
   // (test/setup.ts and this config are intentionally excluded by the glob.)
