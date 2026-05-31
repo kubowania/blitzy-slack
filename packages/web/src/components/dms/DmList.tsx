@@ -1,6 +1,6 @@
 import * as React from 'react';
 import { useLocation } from 'react-router';
-import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { useQueryClient } from '@tanstack/react-query';
 import { Plus } from 'lucide-react';
 
 import { DmListItem } from '@/components/dms/DmListItem';
@@ -10,12 +10,11 @@ import { Empty, EmptyDescription, EmptyTitle } from '@/components/ui/empty';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { useAuth } from '@/hooks/useAuth';
+import { useDms, DMS_QUERY_KEY } from '@/hooks/useDms';
 import { useSocketEvent } from '@/hooks/useSocket';
-import { apiClient } from '@/lib/api-client';
 import { cn } from '@/lib/utils';
-import { useAuthStore } from '@/stores/auth.store';
 
-import type { DMWithParticipants } from '@app/shared/types/dm';
+import type { MessageWithAuthor } from '@app/shared/types/message';
 
 const DM_ROUTE_PATTERN = /^\/app\/dms\/([^/]+)/;
 
@@ -31,39 +30,43 @@ function activeDmIdFrom(pathname: string): string | null {
 /**
  * Sidebar section that lists the current user's direct message conversations.
  *
- * - Fetches DMs via TanStack Query against `GET /api/dms`.
+ * - Fetches DMs via the shared {@link useDms} hook (`GET /api/dms`).
  * - Renders one DmListItem per DM with corner-positioned presence dots.
  * - Hosts the StartDmDialog modal, triggered by the "+" button.
- * - Invalidates the DM list cache on socket events that may create a new DM
- *   visible to the current user (new message in a DM the user participates in).
+ * - Refreshes the DM list on a `message:new` socket event ONLY when the message
+ *   belongs to a direct message (`dmId !== null`) — channel/thread traffic does
+ *   not invalidate the DM list.
  *
  * Visual reference: screenshots/Slack web Jul 2024 100.png (sidebar DM
  * section, immediately below Channels).
  */
 export function DmList(): React.JSX.Element {
   const { user } = useAuth();
-  const token = useAuthStore((state) => state.token);
   const location = useLocation();
   const queryClient = useQueryClient();
 
   const [isDialogOpen, setIsDialogOpen] = React.useState(false);
 
-  const dmsQuery = useQuery<DMWithParticipants[], Error>({
-    queryKey: ['dms'],
-    queryFn: () => apiClient.get<DMWithParticipants[]>('/api/dms'),
-    enabled: token !== null,
-    staleTime: 30_000,
-  });
+  // Read side: the shared `useDms` hook owns the `['dms']` query + auth gating.
+  const { dms, isLoading } = useDms();
 
-  const invalidateDms = React.useCallback((): void => {
-    void queryClient.invalidateQueries({ queryKey: ['dms'] });
-  }, [queryClient]);
+  // Write side: only a NEW message that belongs to a DIRECT MESSAGE can change
+  // the DM list (e.g. the first message of a freshly-started DM bumps it into
+  // view). Channel and thread messages carry `dmId === null`, so invalidating
+  // on every `message:new` would refetch the DM list for unrelated traffic.
+  // Filtering on `dmId !== null` scopes the refetch to relevant events.
+  const handleMessageNew = React.useCallback(
+    (message: MessageWithAuthor): void => {
+      if (message.dmId !== null) {
+        void queryClient.invalidateQueries({ queryKey: DMS_QUERY_KEY });
+      }
+    },
+    [queryClient],
+  );
 
-  useSocketEvent('message:new', invalidateDms);
+  useSocketEvent('message:new', handleMessageNew);
 
   const activeDmId = activeDmIdFrom(location.pathname);
-  const dms = dmsQuery.data ?? [];
-  const isLoading = dmsQuery.isLoading && token !== null;
   const isEmpty = !isLoading && dms.length === 0;
   const currentUserId = user?.id ?? '';
 
@@ -75,6 +78,7 @@ export function DmList(): React.JSX.Element {
     <section
       data-slot="dm-list"
       aria-label="Direct messages"
+      aria-busy={isLoading}
       className="flex flex-col gap-1 px-2 py-2"
     >
       <header className="flex items-center justify-between px-2">
@@ -106,6 +110,13 @@ export function DmList(): React.JSX.Element {
       <div className="flex flex-col gap-0.5">
         {isLoading ? (
           <>
+            {/* Visually-hidden live status so assistive tech announces the
+                loading state the skeleton rows convey visually (the skeletons
+                themselves are decorative). Paired with `aria-busy` on the
+                section above. */}
+            <span role="status" className="sr-only">
+              Loading direct messages…
+            </span>
             <DmListSkeletonRow />
             <DmListSkeletonRow />
             <DmListSkeletonRow />
@@ -140,10 +151,7 @@ export function DmList(): React.JSX.Element {
 
 function DmListSkeletonRow(): React.JSX.Element {
   return (
-    <div
-      data-slot="dm-list-skeleton-row"
-      className="flex items-center gap-2 px-2 py-1.5"
-    >
+    <div data-slot="dm-list-skeleton-row" className="flex items-center gap-2 px-2 py-1.5">
       <Skeleton className="size-7 rounded-full" />
       <Skeleton className="h-3 w-24" />
     </div>

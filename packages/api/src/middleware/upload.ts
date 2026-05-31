@@ -40,17 +40,25 @@ const storage = multer.diskStorage({
 });
 
 /**
- * Multer instance with the `MAX_FILE_SIZE_MB` cap converted to bytes.
+ * Multer instance enforcing the `MAX_FILE_SIZE_MB` attachment cap.
  *
- * When a client exceeds the limit, multer throws a `MulterError` with
- * `code === 'LIMIT_FILE_SIZE'` synchronously to `next()`; the centralized
- * `errorHandler` middleware maps that to a 413 Payload Too Large
- * response with a clear message.
+ * The cap is INCLUSIVE: a file of exactly `MAX_FILE_SIZE_MB` MB is accepted and
+ * only a strictly larger file is rejected. multer delegates to busboy, whose
+ * stream limit fires the moment the byte count REACHES `limits.fileSize`, so the
+ * limit is set one byte above the cap (`… * 1024 * 1024 + 1`) to make the cap
+ * itself pass while a file one byte over trips the guard. (Rationale and the
+ * boundary trade-off are recorded in /docs/decision-log.md.)
+ *
+ * When a client exceeds the limit, multer forwards a `MulterError` with
+ * `code === 'LIMIT_FILE_SIZE'` to `next()`; the centralized `errorHandler`
+ * middleware maps that to a 413 Payload Too Large response. The files service
+ * (`createFile`) re-checks `size > MAX_FILE_SIZE_BYTES` as defense-in-depth, a
+ * comparison consistent with this inclusive cap.
  */
 const uploader = multer({
   storage,
   limits: {
-    fileSize: env.MAX_FILE_SIZE_MB * 1024 * 1024,
+    fileSize: env.MAX_FILE_SIZE_MB * 1024 * 1024 + 1,
   },
 });
 

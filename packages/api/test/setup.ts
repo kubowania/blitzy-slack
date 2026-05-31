@@ -29,8 +29,8 @@ process.env.NODE_ENV = process.env.NODE_ENV ?? 'test';
 
 import { randomBytes } from 'node:crypto';
 import { mkdir, readdir, rm } from 'node:fs/promises';
-import { join } from 'node:path';
-import { promisify } from 'node:util';
+import { homedir, tmpdir } from 'node:os';
+import { basename, join, parse, resolve, sep } from 'node:path';
 import jwt, { type SignOptions } from 'jsonwebtoken';
 import request from 'supertest';
 import type { Application } from 'express';
@@ -167,24 +167,6 @@ export async function registerUser(input: RegisterUserInput = {}): Promise<Regis
   return response.body as RegisteredUser;
 }
 
-/**
- * Logs in via `POST /api/auth/login` and returns the freshly issued token plus
- * the user record.
- */
-export async function loginUser(input: {
-  email: string;
-  password: string;
-}): Promise<RegisteredUser> {
-  const app = createTestApp();
-  const response = await request(app).post('/api/auth/login').send(input);
-  if (response.status !== 200) {
-    throw new Error(
-      `loginUser failed: status=${response.status} body=${JSON.stringify(response.body)}`,
-    );
-  }
-  return response.body as RegisteredUser;
-}
-
 // -----------------------------------------------------------------------------
 // Channel + DM Helpers
 // -----------------------------------------------------------------------------
@@ -269,11 +251,52 @@ export async function cleanDatabase(): Promise<void> {
 }
 
 /**
+ * Directory basenames recognized as dedicated upload locations safe to wipe in
+ * tests. Any path resolving to one of these names — or any path under the OS
+ * temp directory — is treated as a test upload directory.
+ */
+const SAFE_UPLOAD_DIR_NAMES = new Set(['uploads', 'uploads-test']);
+
+/**
+ * Validates that `uploadPath` resolves to a dedicated test uploads directory
+ * before any recursive deletion is performed, and returns the resolved absolute
+ * path. A misconfigured `FILE_UPLOAD_PATH` (filesystem root, the home directory,
+ * the process working / repository root, or any unrecognized directory outside
+ * the OS temp dir) throws so the misconfiguration fails loudly instead of
+ * deleting unintended files. Rationale and the allow-list trade-off are recorded
+ * in /docs/decision-log.md.
+ */
+function assertSafeUploadPath(uploadPath: string): string {
+  const resolved = resolve(uploadPath);
+  const tmpRoot = resolve(tmpdir());
+
+  // Never delete the filesystem root, the home directory, or the process CWD
+  // (repository root when tests run from a package directory).
+  const forbidden = new Set<string>([parse(resolved).root, homedir(), process.cwd()]);
+
+  const underTmp = resolved === tmpRoot || resolved.startsWith(tmpRoot + sep);
+  const hasSafeName = SAFE_UPLOAD_DIR_NAMES.has(basename(resolved));
+
+  if (forbidden.has(resolved) || (!underTmp && !hasSafeName)) {
+    throw new Error(
+      `Refusing to clear unsafe upload path "${resolved}". ` +
+        `Set FILE_UPLOAD_PATH to a dedicated test uploads directory ` +
+        `(e.g. ./uploads, ./uploads-test, or a path under ${tmpRoot}).`,
+    );
+  }
+
+  return resolved;
+}
+
+/**
  * Removes every entry inside `FILE_UPLOAD_PATH` without deleting the directory
- * itself, so the upload destination always exists for the next test.
+ * itself, so the upload destination always exists for the next test. The path
+ * is validated by {@link assertSafeUploadPath} OUTSIDE the try/catch below so a
+ * misconfigured path fails loudly rather than being swallowed by the
+ * first-run-tolerant error handling.
  */
 async function clearUploadsDirectory(): Promise<void> {
-  const uploadPath = env.FILE_UPLOAD_PATH;
+  const uploadPath = assertSafeUploadPath(env.FILE_UPLOAD_PATH);
   try {
     await mkdir(uploadPath, { recursive: true });
     const entries = await readdir(uploadPath);
@@ -313,30 +336,4 @@ export async function closeTestResources(): Promise<void> {
 
   await prismaTest.$disconnect().catch(() => undefined);
   await disconnectRedisClients().catch(() => undefined);
-}
-
-// -----------------------------------------------------------------------------
-// Pre-flight Readiness Check (optional; for suites that need explicit readiness)
-// -----------------------------------------------------------------------------
-
-const sleep = promisify(setTimeout);
-
-/**
- * Polls Postgres and Redis until both respond, or throws after `timeoutMs`.
- * Useful in CI where the containers may take a moment to accept connections.
- */
-export async function waitForTestInfra(timeoutMs = 30_000): Promise<void> {
-  const start = Date.now();
-  let lastError: unknown;
-  while (Date.now() - start < timeoutMs) {
-    try {
-      await prismaTest.$queryRaw`SELECT 1`;
-      await redisClient.ping();
-      return;
-    } catch (err) {
-      lastError = err;
-      await sleep(500);
-    }
-  }
-  throw new Error(`Test infrastructure not ready after ${timeoutMs}ms: ${String(lastError)}`);
 }

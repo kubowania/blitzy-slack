@@ -103,9 +103,7 @@ function getDayKey(iso: string): string {
  * reverses before calling this helper; thread-panel override arrays already
  * arrive oldest-first.
  */
-function groupMessagesWithSeparators(
-  messages: readonly MessageWithAuthor[],
-): readonly ListRow[] {
+function groupMessagesWithSeparators(messages: readonly MessageWithAuthor[]): readonly ListRow[] {
   if (messages.length === 0) {
     return [];
   }
@@ -141,14 +139,8 @@ interface DateSeparatorProps {
  */
 function DateSeparator({ label }: DateSeparatorProps): React.JSX.Element {
   return (
-    <div
-      data-slot="date-separator"
-      className="relative my-3 flex items-center justify-center px-4"
-    >
-      <div
-        className="absolute inset-x-4 top-1/2 border-t border-border"
-        aria-hidden="true"
-      />
+    <div data-slot="date-separator" className="relative my-3 flex items-center justify-center px-4">
+      <div className="absolute inset-x-4 top-1/2 border-t border-border" aria-hidden="true" />
       <span className="relative z-10 rounded-full border border-border bg-background px-3 py-0.5 text-xs font-medium text-foreground">
         {label}
       </span>
@@ -301,23 +293,29 @@ export function MessageList({
   // ===== Main timeline. =====
   return (
     <ScrollArea data-slot="message-list" className={cn('h-full', className)}>
-      <div className="flex flex-col py-2">
+      {/* Accessible live region: announces Socket.io-delivered messages to
+          screen readers as they arrive. `role="log"` marks an append-only
+          chat timeline; `aria-live="polite"` queues announcements without
+          interrupting; `aria-relevant="additions text"` limits announcements
+          to newly added nodes (not removals/reorders from pagination). The
+          surrounding Radix ScrollArea is untouched, so keyboard scrolling is
+          preserved. */}
+      <div
+        role="log"
+        aria-live="polite"
+        aria-relevant="additions text"
+        aria-label="Messages"
+        className="flex flex-col py-2"
+      >
         {/* Top sentinel: the useMessages IntersectionObserver attaches here to
             load older pages when the user scrolls up. Live mode only. */}
         {sentinelRef !== null && hasNextPage ? (
-          <div
-            ref={sentinelRef}
-            data-slot="message-list-sentinel"
-            className="h-1"
-          />
+          <div ref={sentinelRef} data-slot="message-list-sentinel" className="h-1" />
         ) : null}
 
         {/* Pagination spinner while an older page is being fetched. */}
         {isFetchingNextPage ? (
-          <div
-            className="flex justify-center py-2"
-            data-slot="message-list-paging"
-          >
+          <div className="flex justify-center py-2" data-slot="message-list-paging">
             <Spinner />
           </div>
         ) : null}

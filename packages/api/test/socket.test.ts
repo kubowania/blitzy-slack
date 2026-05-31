@@ -108,6 +108,19 @@ interface UntypedOnceEmitter {
   once(event: string, listener: (...args: unknown[]) => void): void;
 }
 
+/**
+ * Minimal structural view of a socket's `.on` / `.off` used by the generic
+ * {@link expectNoEvent} helper to register a listener for a *generic* event key
+ * and later remove it. Like {@link UntypedOnceEmitter}, the typed client cannot
+ * accept a variadic `unknown[]` listener for a generic key, so the calls are
+ * routed through this interface via a double cast. No `any` is introduced, so
+ * the `no-unsafe-*` rules remain satisfied (Rule 3).
+ */
+interface UntypedEventEmitter {
+  on(event: string, listener: (...args: unknown[]) => void): void;
+  off(event: string, listener: (...args: unknown[]) => void): void;
+}
+
 // ---------------------------------------------------------------------------
 // Server / client harness
 // ---------------------------------------------------------------------------
@@ -243,8 +256,59 @@ function waitForEvent<E extends keyof ServerToClientEvents>(
   });
 }
 
+/**
+ * Default window for negative ("no event") assertions. Tied to the Gate 9
+ * message-delivery budget (< 500 ms): an in-process Socket.io broadcast that was
+ * going to happen arrives far inside this window, so the event's ABSENCE after
+ * the window is conclusive — replacing arbitrary fixed sleeps that can false-pass
+ * if an event arrives just after the window.
+ */
+const NO_EVENT_WINDOW_MS = 500;
+
+/**
+ * Resolves if `event` does NOT arrive on `socket` within `timeoutMs`, and rejects
+ * if it does. When `predicate` is supplied, only an event whose payload satisfies
+ * it counts as a violation (e.g. only a `presence:update` with state `offline`);
+ * non-matching occurrences are ignored. The listener is ALWAYS removed before the
+ * promise settles, so it never leaks into a later test. The generic event key
+ * routes registration through {@link UntypedEventEmitter}; payloads are typed as
+ * `Parameters<ServerToClientEvents[E]>` (no `any`, Rule 3).
+ */
+function expectNoEvent<E extends keyof ServerToClientEvents>(
+  socket: ClientConn,
+  event: E,
+  timeoutMs: number = NO_EVENT_WINDOW_MS,
+  predicate?: (...args: Parameters<ServerToClientEvents[E]>) => boolean,
+): Promise<void> {
+  const emitter = socket as unknown as UntypedEventEmitter;
+  return new Promise<void>((resolve, reject) => {
+    const listener = (...args: unknown[]): void => {
+      const payload = args as Parameters<ServerToClientEvents[E]>;
+      if (predicate !== undefined && !predicate(...payload)) {
+        return;
+      }
+      clearTimeout(timer);
+      emitter.off(event, listener);
+      reject(
+        new Error(
+          `Expected no ${String(event)} within ${timeoutMs}ms, but it fired: ${JSON.stringify(payload)}`,
+        ),
+      );
+    };
+    const timer = setTimeout(() => {
+      emitter.off(event, listener);
+      resolve();
+    }, timeoutMs);
+    emitter.on(event, listener);
+  });
+}
+
 /** Emits `channel:join` and resolves with the boolean ack. */
-function emitChannelJoin(socket: ClientConn, channelId: string, timeoutMs = 2000): Promise<boolean> {
+function emitChannelJoin(
+  socket: ClientConn,
+  channelId: string,
+  timeoutMs = 2000,
+): Promise<boolean> {
   return new Promise<boolean>((resolve, reject) => {
     const timer = setTimeout(() => {
       reject(new Error('Timeout waiting for channel:join ack'));
@@ -257,7 +321,11 @@ function emitChannelJoin(socket: ClientConn, channelId: string, timeoutMs = 2000
 }
 
 /** Emits `channel:leave` and resolves with the boolean ack. */
-function emitChannelLeave(socket: ClientConn, channelId: string, timeoutMs = 2000): Promise<boolean> {
+function emitChannelLeave(
+  socket: ClientConn,
+  channelId: string,
+  timeoutMs = 2000,
+): Promise<boolean> {
   return new Promise<boolean>((resolve, reject) => {
     const timer = setTimeout(() => {
       reject(new Error('Timeout waiting for channel:leave ack'));
@@ -668,14 +736,11 @@ describe('Socket.io integration (real-time WebSocket layer)', () => {
       client.emit(SOCKET_EVENTS.PRESENCE_HEARTBEAT);
       await firstP;
 
-      // Second heartbeat is online->online: the transition gate stays closed.
-      let received = false;
-      client.once(SOCKET_EVENTS.PRESENCE_UPDATE, () => {
-        received = true;
-      });
+      // Second heartbeat is online->online: the transition gate stays closed, so
+      // no further presence:update may arrive within the negative-assertion window.
+      const noUpdate = expectNoEvent(client, SOCKET_EVENTS.PRESENCE_UPDATE);
       client.emit(SOCKET_EVENTS.PRESENCE_HEARTBEAT);
-      await new Promise<void>((resolve) => setTimeout(resolve, 300));
-      expect(received).toBe(false);
+      await noUpdate;
     });
 
     it('Gate 9: presence transition propagates to a co-member observer in under 5s', async () => {
@@ -763,16 +828,16 @@ describe('Socket.io integration (real-time WebSocket layer)', () => {
       const [online] = await onlineP;
       expect(online).toMatchObject({ userId: user.id, state: 'online' });
 
-      // Disconnect tab A; tab B remains, so the user is still online -> silence.
-      let sawOffline = false;
-      tabB.once(SOCKET_EVENTS.PRESENCE_UPDATE, (update: PresenceUpdate) => {
-        if (update.state === 'offline') {
-          sawOffline = true;
-        }
-      });
+      // Disconnect tab A; tab B remains, so the user stays online -> NO offline
+      // broadcast may reach tab B within the negative-assertion window.
+      const noOffline = expectNoEvent(
+        tabB,
+        SOCKET_EVENTS.PRESENCE_UPDATE,
+        NO_EVENT_WINDOW_MS,
+        (update: PresenceUpdate) => update.state === 'offline',
+      );
       tabA.disconnect();
-      await new Promise<void>((resolve) => setTimeout(resolve, 500));
-      expect(sawOffline).toBe(false);
+      await noOffline;
     });
 
     it('broadcasts offline when the LAST tab of the user disconnects', async () => {
@@ -825,5 +890,91 @@ describe('Socket.io integration (real-time WebSocket layer)', () => {
       expect(typeof errorPayload.code).toBe('string');
       expect(errorPayload.message.length).toBeGreaterThan(0);
     });
+  });
+
+  describe('Gate 9 — 50 concurrent WebSocket sessions', () => {
+    /** Concurrent-session capacity Gate 9 requires the server to support. */
+    const CONCURRENT_SESSIONS = 50;
+    /**
+     * Budget for establishing every session and fanning a broadcast out to all
+     * of them. Tied to the Gate 9 propagation ceiling (< 5 s): an in-process
+     * Socket.io fan-out to dozens of local sockets completes far inside this
+     * window, so the budget proves real-time delivery under load (Rule 2) while
+     * staying robust to CI scheduling jitter.
+     */
+    const LOAD_BUDGET_MS = 5000;
+
+    it('establishes 50 authenticated sessions and fans a broadcast out to all of them within budget', async () => {
+      // Session 0 is the host that owns the channel and sends the broadcast;
+      // the remaining 49 are receivers. All 50 are connected concurrently.
+      const { token: hostToken, user: host } = await registerUser();
+      const channel = await createTestChannel({ token: hostToken, isPrivate: false });
+
+      const others = await Promise.all(
+        Array.from({ length: CONCURRENT_SESSIONS - 1 }, () => registerUser()),
+      );
+      const sessions = [{ token: hostToken, user: host }, ...others];
+      expect(sessions).toHaveLength(CONCURRENT_SESSIONS);
+
+      // Open every session concurrently (forceNew + websocket-only via
+      // connectClient) and track each for afterEach teardown.
+      const connectStart = Date.now();
+      const clients = await Promise.all(
+        sessions.map(async ({ user }) => {
+          const client = connectClient(
+            server.url,
+            signTestToken({ sub: user.id, email: user.email }),
+          );
+          openClients.push(client);
+          await waitForConnect(client, LOAD_BUDGET_MS);
+          return client;
+        }),
+      );
+      expect(clients).toHaveLength(CONCURRENT_SESSIONS);
+      for (const client of clients) {
+        expect(client.connected).toBe(true);
+      }
+      expect(Date.now() - connectStart).toBeLessThan(LOAD_BUDGET_MS);
+
+      // Every session joins the same public channel room (durable membership +
+      // socket-room join); all 50 acks must be true.
+      const joinAcks = await Promise.all(
+        clients.map((client) => emitChannelJoin(client, channel.id, LOAD_BUDGET_MS)),
+      );
+      expect(joinAcks.every((ok) => ok)).toBe(true);
+      await waitForRoomMembership(
+        server.io,
+        `channel:${channel.id}`,
+        CONCURRENT_SESSIONS,
+        LOAD_BUDGET_MS,
+      );
+
+      // The host broadcasts; every one of the 49 receivers must get message:new
+      // within the load budget.
+      const sender = clients[0];
+      if (sender === undefined) {
+        throw new Error('expected at least one connected session');
+      }
+      const receivers = clients.slice(1);
+      const broadcastStart = Date.now();
+      const receivedAll = Promise.all(
+        receivers.map((client) => waitForEvent(client, SOCKET_EVENTS.MESSAGE_NEW, LOAD_BUDGET_MS)),
+      );
+      sender.emit(
+        SOCKET_EVENTS.MESSAGE_SEND,
+        { content: 'broadcast under load', channelId: channel.id },
+        noopAck,
+      );
+
+      const payloads = await receivedAll;
+      expect(payloads).toHaveLength(CONCURRENT_SESSIONS - 1);
+      for (const [message] of payloads) {
+        expect(message).toMatchObject({
+          content: 'broadcast under load',
+          channelId: channel.id,
+        });
+      }
+      expect(Date.now() - broadcastStart).toBeLessThan(LOAD_BUDGET_MS);
+    }, 45_000);
   });
 });

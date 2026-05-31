@@ -244,7 +244,11 @@ describe('Auth routes — POST /api/auth/register, POST /api/auth/login, GET /ap
     it('rejects a malformed email with 400', async () => {
       const response = await request(app)
         .post('/api/auth/register')
-        .send({ email: 'not-an-email', password: STRONG_PASSWORD, displayName: uniqueDisplayName() })
+        .send({
+          email: 'not-an-email',
+          password: STRONG_PASSWORD,
+          displayName: uniqueDisplayName(),
+        })
         .expect(400);
 
       const body = response.body as ErrorResponseBody;
@@ -596,12 +600,43 @@ describe('Auth routes — POST /api/auth/register, POST /api/auth/login, GET /ap
         .expect('Content-Type', /application\/json/);
     });
 
-    it('exposes an X-Request-Id header (Gate 10 — Pino reqId)', async () => {
+    it('exposes an X-Request-Id header on POST /api/auth/register (Gate 10 — Pino reqId)', async () => {
       // request-logger.ts generates a UUID v4 per request and echoes it back.
       await request(app)
         .post('/api/auth/register')
         .send({ email: uniqueEmail(), password: STRONG_PASSWORD, displayName: uniqueDisplayName() })
         .expect(201)
+        .expect('X-Request-Id', UUID_FORMAT);
+    });
+
+    it('exposes an X-Request-Id header on POST /api/auth/login (Gate 10 — Pino reqId)', async () => {
+      // The reqId middleware runs for every route, so login responses carry the
+      // same UUID v4 header. Register first so the credentials exist.
+      const email = uniqueEmail();
+      await request(app)
+        .post('/api/auth/register')
+        .send({ email, password: STRONG_PASSWORD, displayName: uniqueDisplayName() })
+        .expect(201);
+
+      await request(app)
+        .post('/api/auth/login')
+        .send({ email, password: STRONG_PASSWORD })
+        .expect(200)
+        .expect('X-Request-Id', UUID_FORMAT);
+    });
+
+    it('exposes an X-Request-Id header on GET /api/auth/me (Gate 10 — Pino reqId)', async () => {
+      // Authenticated GET requests are logged with the same reqId contract.
+      const registerResponse = await request(app)
+        .post('/api/auth/register')
+        .send({ email: uniqueEmail(), password: STRONG_PASSWORD, displayName: uniqueDisplayName() })
+        .expect(201);
+      const registered = registerResponse.body as AuthSuccessBody;
+
+      await request(app)
+        .get('/api/auth/me')
+        .set('Authorization', `Bearer ${registered.token}`)
+        .expect(200)
         .expect('X-Request-Id', UUID_FORMAT);
     });
   });

@@ -43,6 +43,8 @@ import type { Application } from 'express';
 import type { FileAttachment } from '@app/shared/types/message';
 import { MAX_FILE_SIZE_MB, MAX_FILE_SIZE_BYTES } from '@app/shared/constants/limits';
 
+import { createFile, type UploadedMulterFile } from '../src/services/files.service.js';
+import { ForbiddenError } from '../src/middleware/errors.js';
 import {
   createTestApp,
   cleanDatabase,
@@ -196,11 +198,38 @@ describe('POST /api/files, GET /api/files/:id', () => {
       expect(filesCount).toBe(0);
     });
 
+    it('accepts a file exactly at the byte cap (10 MB, inclusive)', async () => {
+      const { token } = await registerUser();
+      // INCLUSIVE-CAP CONTRACT: a file whose size EQUALS MAX_FILE_SIZE_BYTES must
+      // succeed. multer's busboy guard trips when the stream size REACHES
+      // `limits.fileSize`, so the middleware configures the limit at
+      // MAX_FILE_SIZE_BYTES + 1 (see middleware/upload.ts). The service layer then
+      // enforces the true cap with a strict `size > maxBytes` check, making exactly
+      // 10 MB the largest accepted upload. See /docs/decision-log.md for the
+      // boundary rationale (supersedes the earlier exclusive-cap decision).
+      const atCap = Buffer.alloc(MAX_FILE_SIZE_BYTES);
+
+      const response = await request(app)
+        .post('/api/files')
+        .set('Authorization', `Bearer ${token}`)
+        .attach('file', atCap, {
+          filename: 'at-cap.bin',
+          contentType: 'application/octet-stream',
+        })
+        .expect(201);
+
+      const body = response.body as FileAttachment;
+      expect(body.sizeBytes).toBe(MAX_FILE_SIZE_BYTES);
+
+      // The at-cap upload is persisted exactly once.
+      const dbFile = await prismaTest.file.findUnique({ where: { id: body.id } });
+      expect(dbFile?.sizeBytes).toBe(MAX_FILE_SIZE_BYTES);
+    });
+
     it('accepts the largest file below the cap (one byte under)', async () => {
       const { token } = await registerUser();
-      // multer's `limits.fileSize` is the busboy stream cap: a stream that REACHES
-      // the limit is truncated (413), so the largest accepted upload is one byte
-      // under the cap. See /docs/decision-log.md for the boundary rationale.
+      // Sanity check on the under-cap side of the boundary: a file one byte below
+      // the cap is always accepted.
       const justUnder = Buffer.alloc(MAX_FILE_SIZE_BYTES - 1);
 
       const response = await request(app)
@@ -216,17 +245,17 @@ describe('POST /api/files, GET /api/files/:id', () => {
       expect(body.sizeBytes).toBe(MAX_FILE_SIZE_BYTES - 1);
     });
 
-    it('rejects a file exactly at the byte cap with 413', async () => {
+    it('rejects a file one byte over the cap (MAX + 1) with 413', async () => {
       const { token } = await registerUser();
-      // A stream whose size REACHES `limits.fileSize` trips multer's
-      // LIMIT_FILE_SIZE guard, so the cap itself is exclusive.
-      const atCap = Buffer.alloc(MAX_FILE_SIZE_BYTES);
+      // EXCLUSIVE on the over-cap side: a file of MAX_FILE_SIZE_BYTES + 1 is the
+      // smallest rejected upload, tripping multer's LIMIT_FILE_SIZE guard.
+      const oneOver = Buffer.alloc(MAX_FILE_SIZE_BYTES + 1);
 
       const response = await request(app)
         .post('/api/files')
         .set('Authorization', `Bearer ${token}`)
-        .attach('file', atCap, {
-          filename: 'at-cap.bin',
+        .attach('file', oneOver, {
+          filename: 'one-over.bin',
           contentType: 'application/octet-stream',
         })
         .expect(413);
@@ -236,6 +265,29 @@ describe('POST /api/files, GET /api/files/:id', () => {
 
       const filesCount = await prismaTest.file.count();
       expect(filesCount).toBe(0);
+    });
+
+    it('rejects an oversize file at the service layer (defense-in-depth guard)', async () => {
+      // The multer middleware rejects oversize uploads before the route handler
+      // runs, so the service's own `size > maxBytes` guard is a second line of
+      // defense (e.g. for a future non-HTTP caller). Drive the service directly
+      // with a descriptor one byte over the cap to assert the guard throws a
+      // ForbiddenError BEFORE any File row is written.
+      const { user } = await registerUser();
+      const oversize: UploadedMulterFile = {
+        originalname: 'oversize.bin',
+        filename: 'stored-oversize.bin',
+        mimetype: 'application/octet-stream',
+        size: MAX_FILE_SIZE_BYTES + 1,
+      };
+
+      await expect(
+        createFile({ multerFile: oversize, uploadedById: user.id }),
+      ).rejects.toBeInstanceOf(ForbiddenError);
+
+      // The guard short-circuits before the Prisma insert, so nothing persists.
+      const filesAfter = await prismaTest.file.count();
+      expect(filesAfter).toBe(0);
     });
   });
 

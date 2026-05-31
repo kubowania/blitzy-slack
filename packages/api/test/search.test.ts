@@ -186,6 +186,64 @@ describe('GET /api/search?q=', () => {
       expect(match.author.id).toBe(user.id);
       expect(match.author.displayName).toBe(user.displayName);
     });
+
+    it('aggregates reactions on a matched message (toReactionSummaries)', async () => {
+      // A matched message hydrates its reactions into per-emoji summaries. This
+      // exercises the grouping logic that ordinary search hits (which carry no
+      // reactions) never reach:
+      //   - 👍 : both the caller (alice) and bob react -> count 2, the second
+      //          same-emoji row drives the "existing group" merge branch, and
+      //          hasCurrentUser is true because the caller is a reactor.
+      //   - 🎉 : only bob reacts -> count 1, hasCurrentUser false (caller absent).
+      //   - 😀 : only the caller reacts -> count 1, hasCurrentUser true.
+      const { token: aliceToken, user: alice } = await registerUser();
+      const { user: bob } = await registerUser();
+      const channel = await createTestChannel({ token: aliceToken, isPrivate: false });
+      const message = await prismaTest.message.create({
+        data: {
+          content: 'zorptastic message awaiting reactions',
+          authorId: alice.id,
+          channelId: channel.id,
+          parentId: null,
+        },
+      });
+      await prismaTest.messageReaction.createMany({
+        data: [
+          { messageId: message.id, userId: alice.id, emoji: '👍' },
+          { messageId: message.id, userId: bob.id, emoji: '👍' },
+          { messageId: message.id, userId: bob.id, emoji: '🎉' },
+          { messageId: message.id, userId: alice.id, emoji: '😀' },
+        ],
+      });
+
+      const response = await request(app)
+        .get('/api/search?q=zorptastic')
+        .set('Authorization', `Bearer ${aliceToken}`)
+        .expect(200);
+
+      const body = response.body as SearchResponse;
+      const [hit] = body.results;
+      if (hit === undefined) {
+        throw new Error('expected exactly one search result');
+      }
+
+      const byEmoji = new Map(hit.reactions.map((reaction) => [reaction.emoji, reaction]));
+
+      const thumbs = byEmoji.get('👍');
+      expect(thumbs?.count).toBe(2);
+      expect(thumbs?.userIds).toEqual(expect.arrayContaining([alice.id, bob.id]));
+      expect(thumbs?.hasCurrentUser).toBe(true);
+
+      const tada = byEmoji.get('🎉');
+      expect(tada?.count).toBe(1);
+      expect(tada?.userIds).toEqual([bob.id]);
+      expect(tada?.hasCurrentUser).toBe(false);
+
+      const grin = byEmoji.get('😀');
+      expect(grin?.count).toBe(1);
+      expect(grin?.userIds).toEqual([alice.id]);
+      expect(grin?.hasCurrentUser).toBe(true);
+    });
   });
 
   // ---------------------------------------------------------------------------
