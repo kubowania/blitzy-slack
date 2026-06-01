@@ -62,9 +62,10 @@ export interface MessageComposerProps {
   /** DM scope. Mutually exclusive with `channelId` and `parentMessageId`. */
   dmId?: string;
   /**
-   * Thread parent ID. When provided, the composer posts to
-   * `/api/messages/:parentMessageId/replies` instead of the channel/dm
-   * endpoint. Used by the thread panel.
+   * Thread parent ID. When provided, the composer sends the same canonical
+   * `POST /api/messages` request as a channel/DM message but adds `parentId`
+   * to the body so the server attaches the reply to its parent. Used by the
+   * thread panel.
    */
   parentMessageId?: string;
   /**

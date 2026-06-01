@@ -268,7 +268,7 @@ async function requestBlob(path: string, options?: { signal?: AbortSignal }): Pr
  *               POST /api/channels/:id/join, POST /api/channels/:id/leave
  *   - Messages: GET  /api/messages/:id/replies,
  *               POST /api/messages/:id/reactions,
- *               DELETE /api/messages/:id/reactions
+ *               DELETE /api/messages/:id/reactions/:emoji
  *   - DMs:      GET  /api/dms, POST /api/dms, GET /api/dms/:id/messages
  *   - Files:    POST /api/files (multipart), GET /api/files/:id
  *   - Search:   GET  /api/search?q=

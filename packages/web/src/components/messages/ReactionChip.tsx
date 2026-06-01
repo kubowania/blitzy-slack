@@ -29,7 +29,8 @@ export interface ReactionChipProps {
  *  - When the current user has NOT reacted, the click sends
  *    `POST /api/messages/:id/reactions` with `{ emoji }` (add).
  *  - When the current user HAS reacted, the click sends
- *    `DELETE /api/messages/:id/reactions?emoji=...` (remove).
+ *    `DELETE /api/messages/:id/reactions/:emoji` (remove) — the emoji is a
+ *    URL-encoded path segment, not a query-string parameter.
  *
  * The HTTP round-trip runs through a TanStack Query `useMutation`. The chip
  * applies an OPTIMISTIC update on click so the active styling and the count
@@ -79,8 +80,12 @@ export function ReactionChip({
           emoji: reaction.emoji,
         });
       } else {
-        const params = new URLSearchParams({ emoji: reaction.emoji });
-        await apiClient.del<void>(`/api/messages/${messageId}/reactions?${params.toString()}`);
+        // The emoji is a URL PATH segment (the canonical reaction-removal
+        // contract), encoded with encodeURIComponent so multi-byte emoji are
+        // safely percent-escaped within the path.
+        await apiClient.del<void>(
+          `/api/messages/${messageId}/reactions/${encodeURIComponent(reaction.emoji)}`,
+        );
       }
     },
     onError: () => {

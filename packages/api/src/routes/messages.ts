@@ -5,7 +5,6 @@
  * GET    /api/messages/:id/replies             — list thread replies (oldest-first)
  * POST   /api/messages/:id/reactions           — add an emoji reaction (idempotent)
  * DELETE /api/messages/:id/reactions/:emoji    — remove an emoji reaction (idempotent)
- * DELETE /api/messages/:id/reactions?emoji=…   — remove via query param (same operation)
  *
  * This file is the HTTP write path for the real-time messaging surface and the
  * primary producer of the MESSAGE_NEW, REACTION_ADDED, and REACTION_REMOVED
@@ -89,11 +88,7 @@ type AppServer = Server<
 /** Validates the `:id` path parameter as a Prisma cuid; rejects extra params. */
 const messageIdParamsSchema = z.object({ id: z.string().cuid() }).strict();
 
-/**
- * Validates a reaction `{ emoji }` payload. Used for the POST reaction BODY and,
- * because a Zod object schema is request-position agnostic, reused for the
- * query-param DELETE variant's QUERY.
- */
+/** Validates the POST reaction `{ emoji }` request BODY. */
 const emojiBodySchema = z.object({ emoji: z.string().min(1).max(64) }).strict();
 
 /** Validates the path params for DELETE /:id/reactions/:emoji (cuid id + emoji). */
@@ -306,17 +301,5 @@ router.delete(
     res: Response<MessageWithAuthor>,
   ): Promise<void> => {
     await removeReactionAndBroadcast(req, res, req.params.id, req.params.emoji);
-  },
-);
-
-router.delete(
-  '/:id/reactions',
-  requireAuth,
-  validate({ params: messageIdParamsSchema, query: emojiBodySchema }),
-  async (
-    req: Request<{ id: string }, MessageWithAuthor, unknown, { emoji: string }>,
-    res: Response<MessageWithAuthor>,
-  ): Promise<void> => {
-    await removeReactionAndBroadcast(req, res, req.params.id, req.query.emoji);
   },
 );
