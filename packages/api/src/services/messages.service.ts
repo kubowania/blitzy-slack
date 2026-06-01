@@ -397,9 +397,7 @@ export async function assertThreadAccess(parentId: string, userId: string): Prom
  * @throws {ForbiddenError} when the caller lacks access to the target or attempts
  *   to attach a file uploaded by someone else.
  */
-export async function createMessage(
-  input: SendMessageServiceInput,
-): Promise<MessageWithAuthor> {
+export async function createMessage(input: SendMessageServiceInput): Promise<MessageWithAuthor> {
   const { authorId, content, channelId, dmId, parentId, fileId } = input;
 
   // XOR: `hasChannel === hasDm` is true both when neither is set and when both
@@ -411,9 +409,7 @@ export async function createMessage(
   }
 
   if (content.length > MAX_MESSAGE_LENGTH) {
-    throw new ValidationError(
-      `Message content exceeds ${MAX_MESSAGE_LENGTH} characters`,
-    );
+    throw new ValidationError(`Message content exceeds ${MAX_MESSAGE_LENGTH} characters`);
   }
   const hasFile = fileId !== undefined && fileId !== null;
   if (content.length === 0 && !hasFile) {
@@ -620,9 +616,7 @@ export async function listThreadReplies(
  * @throws {ValidationError} when the message has neither a channel nor a DM
  *   context (a defensive guard against a corrupted row).
  */
-export async function addReaction(
-  input: ReactionServiceInput,
-): Promise<MessageWithAuthor> {
+export async function addReaction(input: ReactionServiceInput): Promise<MessageWithAuthor> {
   const { messageId, userId, emoji } = input;
 
   const message = await prisma.message.findUnique({
@@ -680,9 +674,7 @@ export async function addReaction(
  * @throws {ValidationError} when the message has neither a channel nor a DM
  *   context (a defensive guard against a corrupted row).
  */
-export async function removeReaction(
-  input: ReactionServiceInput,
-): Promise<MessageWithAuthor> {
+export async function removeReaction(input: ReactionServiceInput): Promise<MessageWithAuthor> {
   const { messageId, userId, emoji } = input;
 
   const message = await prisma.message.findUnique({
@@ -708,9 +700,7 @@ export async function removeReaction(
       where: { messageId_userId_emoji: { messageId, userId, emoji } },
     });
   } catch (err) {
-    if (
-      !(err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2025')
-    ) {
+    if (!(err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2025')) {
       throw err;
     }
   }
@@ -729,4 +719,3 @@ export async function removeReaction(
 
   return toMessageDto(updated, userId);
 }
-

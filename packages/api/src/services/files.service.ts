@@ -121,10 +121,7 @@ export async function createFile(input: SaveUploadedFileInput): Promise<FileAtta
 
   const maxBytes = env.MAX_FILE_SIZE_MB * 1024 * 1024;
   if (multerFile.size > maxBytes) {
-    logger.warn(
-      { uploadedById, size: multerFile.size, maxBytes },
-      'files.createFile.oversize',
-    );
+    logger.warn({ uploadedById, size: multerFile.size, maxBytes }, 'files.createFile.oversize');
     throw new ForbiddenError('File exceeds maximum allowed size');
   }
 

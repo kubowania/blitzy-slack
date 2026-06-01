@@ -581,9 +581,7 @@ export async function getChannelDetail(
  * @throws {ForbiddenError} when the channel is private and the caller is not a member.
  * @throws {ValidationError} when a supplied cursor is malformed.
  */
-export async function listChannelMessages(
-  input: ListMessagesInput,
-): Promise<ListMessagesResult> {
+export async function listChannelMessages(input: ListMessagesInput): Promise<ListMessagesResult> {
   const { channelId, userId, cursor } = input;
   const limit = resolveLimit(input.limit);
 

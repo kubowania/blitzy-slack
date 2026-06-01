@@ -5,11 +5,7 @@ import { format, formatDistanceToNow } from 'date-fns';
 
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Button } from '@/components/ui/button';
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipTrigger,
-} from '@/components/ui/tooltip';
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { FilePreview } from '@/components/files/FilePreview';
 import { PresenceIndicator } from '@/components/presence/PresenceIndicator';
 import { ReactionChip } from './ReactionChip';
@@ -80,8 +76,7 @@ function getInitials(displayName: string): string {
     return '?';
   }
   const first = parts[0]?.charAt(0) ?? '';
-  const last =
-    parts.length > 1 ? (parts[parts.length - 1]?.charAt(0) ?? '') : '';
+  const last = parts.length > 1 ? (parts[parts.length - 1]?.charAt(0) ?? '') : '';
   return `${first}${last}`.toUpperCase();
 }
 
@@ -140,28 +135,18 @@ export function MessageItem({
       <div className="relative shrink-0">
         <Avatar className="size-9">
           {message.author.avatarUrl !== null ? (
-            <AvatarImage
-              src={message.author.avatarUrl}
-              alt={message.author.displayName}
-            />
+            <AvatarImage src={message.author.avatarUrl} alt={message.author.displayName} />
           ) : null}
-          <AvatarFallback>
-            {getInitials(message.author.displayName)}
-          </AvatarFallback>
+          <AvatarFallback>{getInitials(message.author.displayName)}</AvatarFallback>
         </Avatar>
-        <PresenceIndicator
-          userId={message.author.id}
-          className="absolute right-0 bottom-0"
-        />
+        <PresenceIndicator userId={message.author.id} className="absolute right-0 bottom-0" />
       </div>
 
       {/* Message body column */}
       <div className="min-w-0 flex-1">
         {/* Header: author name + inline timestamp */}
         <div className="flex items-baseline gap-2">
-          <span className="text-sm font-bold text-foreground">
-            {message.author.displayName}
-          </span>
+          <span className="text-sm font-bold text-foreground">{message.author.displayName}</span>
           <Tooltip>
             <TooltipTrigger asChild>
               <time
@@ -173,9 +158,7 @@ export function MessageItem({
             </TooltipTrigger>
             <TooltipContent>
               <span className="block">{full}</span>
-              <span className="block text-primary-foreground/70">
-                {relative}
-              </span>
+              <span className="block text-primary-foreground/70">{relative}</span>
             </TooltipContent>
           </Tooltip>
         </div>

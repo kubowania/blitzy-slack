@@ -368,7 +368,8 @@ export function MessageList({
       }
     }
 
-    distanceFromBottomRef.current = viewport.scrollHeight - viewport.scrollTop - viewport.clientHeight;
+    distanceFromBottomRef.current =
+      viewport.scrollHeight - viewport.scrollTop - viewport.clientHeight;
     isNearBottomRef.current = distanceFromBottomRef.current < 120;
     prevBottomIdRef.current = bottomId;
   }, [useOverride, scopeKey, messageCount, bottomId, hasReachedBottom]);

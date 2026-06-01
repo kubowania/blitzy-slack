@@ -48,11 +48,7 @@ import { Router, type Request, type Response } from 'express';
 import type { Server } from 'socket.io';
 import { z } from 'zod';
 
-import {
-  MESSAGE_NEW,
-  REACTION_ADDED,
-  REACTION_REMOVED,
-} from '@app/shared/constants/events';
+import { MESSAGE_NEW, REACTION_ADDED, REACTION_REMOVED } from '@app/shared/constants/events';
 import { sendMessageSchema } from '@app/shared/schemas/message';
 import type { SendMessageInput } from '@app/shared/schemas/message';
 import type { MessageWithAuthor, ReactionSummary, Thread } from '@app/shared/types/message';
@@ -78,12 +74,7 @@ import { channelRoom, dmRoom, threadRoom } from '../sockets/rooms.js';
  * makes every `io.to(room).emit(event, payload)` checked at compile time against
  * the ServerToClientEvents map (event name AND payload shape).
  */
-type AppServer = Server<
-  ClientToServerEvents,
-  ServerToClientEvents,
-  InterServerEvents,
-  SocketData
->;
+type AppServer = Server<ClientToServerEvents, ServerToClientEvents, InterServerEvents, SocketData>;
 
 /** Validates the `:id` path parameter as a Prisma cuid; rejects extra params. */
 const messageIdParamsSchema = z.object({ id: z.string().cuid() }).strict();
@@ -227,10 +218,7 @@ router.get(
   '/:id/replies',
   requireAuth,
   validate({ params: messageIdParamsSchema }),
-  async (
-    req: Request<{ id: string }>,
-    res: Response<Thread>,
-  ): Promise<void> => {
+  async (req: Request<{ id: string }>, res: Response<Thread>): Promise<void> => {
     const userId = req.user!.id;
     const parentId = req.params.id;
 

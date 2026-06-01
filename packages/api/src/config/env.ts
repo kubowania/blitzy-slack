@@ -30,11 +30,16 @@ const EnvSchema = z.object({
   NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
   // TCP port the Express + Socket.io HTTP server listens on.
   PORT: z.coerce.number().int().positive().default(3000),
-  // Required. Prisma (PostgreSQL) datasource connection string.
+  // Required. Prisma (PostgreSQL) datasource connection string. Both the
+  // `postgresql://` and the `postgres://` schemes are accepted (Prisma treats
+  // them as equivalent); any other scheme is rejected at startup.
   DATABASE_URL: z
     .string()
     .url()
-    .startsWith('postgresql://', 'DATABASE_URL must start with postgresql://'),
+    .refine(
+      (value) => value.startsWith('postgresql://') || value.startsWith('postgres://'),
+      'DATABASE_URL must start with postgresql:// or postgres://',
+    ),
   // Required. Redis connection string (Socket.io adapter + presence cache).
   REDIS_URL: z.string().url().startsWith('redis://', 'REDIS_URL must start with redis://'),
   // Required. HS256 signing secret shared by HTTP routes and the Socket.io handshake.

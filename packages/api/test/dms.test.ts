@@ -522,10 +522,9 @@ describe('Direct message routes — GET /api/dms, POST /api/dms, GET /api/dms/:i
       // A token that base64url-decodes to valid JSON but omits the required
       // (createdAt, id) fields must also be rejected: decoding succeeds yet the
       // payload shape is invalid, so the server returns 400 rather than 500.
-      const wrongShapeCursor = Buffer.from(
-        JSON.stringify({ foo: 'bar' }),
-        'utf8',
-      ).toString('base64url');
+      const wrongShapeCursor = Buffer.from(JSON.stringify({ foo: 'bar' }), 'utf8').toString(
+        'base64url',
+      );
 
       await request(app)
         .get(`/api/dms/${dmId}/messages?cursor=${encodeURIComponent(wrongShapeCursor)}`)

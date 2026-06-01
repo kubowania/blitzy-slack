@@ -25,11 +25,7 @@ export const registerSchema = z
   .object({
     email: z.string().trim().email(),
     password: z.string().min(MIN_PASSWORD_LENGTH),
-    displayName: z
-      .string()
-      .trim()
-      .min(MIN_DISPLAY_NAME_LENGTH)
-      .max(MAX_DISPLAY_NAME_LENGTH),
+    displayName: z.string().trim().min(MIN_DISPLAY_NAME_LENGTH).max(MAX_DISPLAY_NAME_LENGTH),
   })
   .strict();
 

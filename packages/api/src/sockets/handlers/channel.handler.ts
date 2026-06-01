@@ -322,4 +322,3 @@ function resolveErrorCode(err: unknown): string {
   }
   return 'INTERNAL_ERROR';
 }
-

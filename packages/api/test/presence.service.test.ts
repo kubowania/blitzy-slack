@@ -52,12 +52,7 @@ import {
   recordHeartbeat,
   clearPresence,
 } from '../src/services/presence.service.js';
-import {
-  cleanDatabase,
-  closeTestResources,
-  registerUser,
-  redisClient,
-} from './setup.js';
+import { cleanDatabase, closeTestResources, registerUser, redisClient } from './setup.js';
 
 /** Mirror of the service's private key namespace (`presence:<userId>`). */
 function presenceKey(userId: string): string {

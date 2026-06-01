@@ -5,13 +5,7 @@ import { Link, useNavigate } from 'react-router';
 import { registerSchema, type RegisterInput } from '@app/shared/schemas/auth';
 
 import { Button } from '@/components/ui/button';
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from '@/components/ui/card';
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import {
   Form,
   FormControl,
@@ -150,12 +144,7 @@ export default function Register() {
                   <FormItem>
                     <FormLabel htmlFor="password">Password</FormLabel>
                     <FormControl>
-                      <Input
-                        id="password"
-                        type="password"
-                        autoComplete="new-password"
-                        {...field}
-                      />
+                      <Input id="password" type="password" autoComplete="new-password" {...field} />
                     </FormControl>
                     <FormDescription>At least 8 characters.</FormDescription>
                     <FormMessage />

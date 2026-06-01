@@ -177,11 +177,8 @@ function toDmDto(
   return {
     id: record.id,
     createdAt: record.createdAt.toISOString(),
-    participants: record.participants.map((participant) =>
-      toParticipantSummary(participant.user),
-    ),
-    lastMessageAt:
-      latestMessage === undefined ? null : latestMessage.createdAt.toISOString(),
+    participants: record.participants.map((participant) => toParticipantSummary(participant.user)),
+    lastMessageAt: latestMessage === undefined ? null : latestMessage.createdAt.toISOString(),
   };
 }
 
@@ -370,9 +367,7 @@ export async function listDmIds(userId: string): Promise<string[]> {
  * @throws {ForbiddenError} when `initiatorId === otherUserId` (no self-DMs).
  * @throws {NotFoundError} when the target user does not exist.
  */
-export async function startDm(
-  input: CreateOrFindDmInput,
-): Promise<DMWithParticipants> {
+export async function startDm(input: CreateOrFindDmInput): Promise<DMWithParticipants> {
   const { initiatorId, otherUserId } = input;
 
   if (initiatorId === otherUserId) {
@@ -389,9 +384,7 @@ export async function startDm(
 
   // Canonical ordering: (A, B) and (B, A) collapse onto the same unique pair.
   const [participantOneId, participantTwoId] =
-    initiatorId < otherUserId
-      ? [initiatorId, otherUserId]
-      : [otherUserId, initiatorId];
+    initiatorId < otherUserId ? [initiatorId, otherUserId] : [otherUserId, initiatorId];
 
   const existing = await prisma.directMessage.findUnique({
     where: {
@@ -410,10 +403,7 @@ export async function startDm(
   });
 
   if (existing !== null) {
-    logger.debug(
-      { dmId: existing.id, initiatorId, otherUserId },
-      'dms.startDm.found',
-    );
+    logger.debug({ dmId: existing.id, initiatorId, otherUserId }, 'dms.startDm.found');
     return toDmDto(existing);
   }
 
@@ -438,19 +428,13 @@ export async function startDm(
       },
     });
 
-    logger.info(
-      { dmId: created.id, initiatorId, otherUserId },
-      'dms.startDm.created',
-    );
+    logger.info({ dmId: created.id, initiatorId, otherUserId }, 'dms.startDm.created');
     return toDmDto(created);
   } catch (err) {
     // A concurrent caller may have created the same canonical pair between our
     // find and our create, tripping the unique constraint (P2002). Recover by
     // re-reading the now-existing conversation instead of surfacing the error.
-    if (
-      err instanceof Prisma.PrismaClientKnownRequestError &&
-      err.code === 'P2002'
-    ) {
+    if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002') {
       const raced = await prisma.directMessage.findUnique({
         where: {
           participantOneId_participantTwoId: { participantOneId, participantTwoId },
@@ -467,10 +451,7 @@ export async function startDm(
         },
       });
       if (raced !== null) {
-        logger.debug(
-          { dmId: raced.id, initiatorId, otherUserId },
-          'dms.startDm.found',
-        );
+        logger.debug({ dmId: raced.id, initiatorId, otherUserId }, 'dms.startDm.found');
         return toDmDto(raced);
       }
     }
@@ -493,9 +474,7 @@ export async function startDm(
  * @throws {ForbiddenError} when the caller is not a participant.
  * @throws {ValidationError} when a supplied cursor is malformed.
  */
-export async function listDmMessages(
-  input: ListDmMessagesInput,
-): Promise<ListDmMessagesResult> {
+export async function listDmMessages(input: ListDmMessagesInput): Promise<ListDmMessagesResult> {
   const { dmId, userId, cursor } = input;
   const limit = resolveLimit(input.limit);
 
@@ -564,10 +543,7 @@ export async function listDmMessages(
         })
       : null;
 
-  logger.debug(
-    { dmId, userId, count: messages.length, hasMore },
-    'dms.listMessages.success',
-  );
+  logger.debug({ dmId, userId, count: messages.length, hasMore }, 'dms.listMessages.success');
 
   return { messages, nextCursor };
 }

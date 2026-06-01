@@ -131,7 +131,11 @@ function applyMarkdownFormat(
   if (wrap !== undefined) {
     const inner = selected.length > 0 ? selected : wrap.placeholder;
     const next =
-      value.slice(0, selectionStart) + wrap.prefix + inner + wrap.suffix + value.slice(selectionEnd);
+      value.slice(0, selectionStart) +
+      wrap.prefix +
+      inner +
+      wrap.suffix +
+      value.slice(selectionEnd);
     const innerStart = selectionStart + wrap.prefix.length;
     return { value: next, selectionStart: innerStart, selectionEnd: innerStart + inner.length };
   }

@@ -19,7 +19,7 @@ PKG_DB  := @app/db
 PKG_API := @app/api
 PKG_WEB := @app/web
 
-.PHONY: help install up local dev build test test-e2e lint format typecheck migrate seed db-studio down clean
+.PHONY: help install up local dev build generate test test-e2e lint format typecheck migrate seed db-studio down clean
 
 help: ## Show all available targets
 	@echo "blitzy-slack — available make targets:"
@@ -37,6 +37,7 @@ local: ## Full local bring-up: Docker -> install -> migrate -> seed -> dev serve
 	@echo "→ Bringing up blitzy-slack locally..."
 	@$(MAKE) up
 	@$(MAKE) install
+	@$(MAKE) generate
 	@$(MAKE) migrate
 	@set -e; \
 	API_URL="$${VITE_API_URL:-http://localhost:3000}"; \
@@ -63,6 +64,7 @@ local: ## Full local bring-up: Docker -> install -> migrate -> seed -> dev serve
 dev: local ## Alias for `make local`
 
 build: ## Build every workspace package for production
+	@$(MAKE) generate
 	@echo "→ Building all packages..."
 	@pnpm -r build
 
@@ -88,6 +90,10 @@ typecheck: ## Type-check every workspace package (tsc --noEmit)
 	@echo "→ Type-checking all packages..."
 	@pnpm -r --if-present typecheck
 
+generate: ## Generate the Prisma client for @app/db (run before migrate/build/dev)
+	@echo "→ Generating Prisma client (@app/db)..."
+	@pnpm --filter $(PKG_DB) generate
+
 migrate: ## Apply all Prisma migrations to the database
 	@echo "→ Applying Prisma migrations..."
 	@pnpm --filter $(PKG_DB) exec prisma migrate deploy
@@ -104,12 +110,14 @@ down: ## Stop the Docker Compose services
 	@echo "→ Stopping Docker services..."
 	@docker compose down
 
-clean: ## Stop Docker (removing volumes), then remove node_modules, build artifacts, and uploads
+clean: ## Stop Docker (removing volumes), then remove node_modules, build artifacts, and upload contents
 	@echo "→ Stopping Docker services and removing named volumes..."
 	@docker compose down -v
 	@echo "→ Removing dependencies and build artifacts..."
 	@find . -name 'node_modules' -type d -prune -exec rm -rf '{}' +
 	@find . -name 'dist' -type d -prune -exec rm -rf '{}' +
 	@find . -name 'coverage' -type d -prune -exec rm -rf '{}' +
-	@rm -rf uploads packages/api/uploads playwright-report test-results
+	@rm -rf packages/api/uploads playwright-report test-results
+	@echo "→ Clearing uploads/ contents (preserving the tracked uploads/.gitkeep)..."
+	@if [ -d uploads ]; then find uploads -mindepth 1 ! -name .gitkeep -delete; fi
 	@echo "→ Clean complete."

@@ -1,9 +1,6 @@
 import { z } from 'zod';
 
-import {
-  MAX_CHANNEL_DESCRIPTION_LENGTH,
-  MAX_CHANNEL_NAME_LENGTH,
-} from '../constants/limits.js';
+import { MAX_CHANNEL_DESCRIPTION_LENGTH, MAX_CHANNEL_NAME_LENGTH } from '../constants/limits.js';
 
 /**
  * Slack-style channel-name pattern: lowercase letters, digits, underscore,
@@ -30,17 +27,8 @@ const CHANNEL_NAME_PATTERN = /^[a-z0-9_-]+$/;
  */
 export const createChannelSchema = z
   .object({
-    name: z
-      .string()
-      .trim()
-      .min(1)
-      .max(MAX_CHANNEL_NAME_LENGTH)
-      .regex(CHANNEL_NAME_PATTERN),
-    description: z
-      .string()
-      .trim()
-      .max(MAX_CHANNEL_DESCRIPTION_LENGTH)
-      .optional(),
+    name: z.string().trim().min(1).max(MAX_CHANNEL_NAME_LENGTH).regex(CHANNEL_NAME_PATTERN),
+    description: z.string().trim().max(MAX_CHANNEL_DESCRIPTION_LENGTH).optional(),
     isPrivate: z.boolean(),
   })
   .strict();

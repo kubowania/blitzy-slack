@@ -399,11 +399,7 @@ async function waitForRoomMembership(
  * deterministically await an asynchronous `socket.leave` (the `dm:leave` /
  * `thread:leave` handlers join/leave through an awaited adapter call).
  */
-async function waitForRoomEmpty(
-  io: TestIOServer,
-  room: string,
-  timeoutMs = 2000,
-): Promise<void> {
+async function waitForRoomEmpty(io: TestIOServer, room: string, timeoutMs = 2000): Promise<void> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() <= deadline) {
     const sockets = await io.in(room).fetchSockets();

@@ -147,11 +147,7 @@ export function DmList(): React.JSX.Element {
           : null}
       </div>
 
-      <StartDmDialog
-        open={isDialogOpen}
-        onOpenChange={setIsDialogOpen}
-        triggerRef={dmTriggerRef}
-      />
+      <StartDmDialog open={isDialogOpen} onOpenChange={setIsDialogOpen} triggerRef={dmTriggerRef} />
     </section>
   );
 }

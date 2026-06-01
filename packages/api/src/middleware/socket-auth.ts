@@ -89,10 +89,7 @@ const extractToken = (socket: HandshakeSocket): string | undefined => {
  * @param next - Socket.io continuation callback: called with no argument to
  *   accept the connection, or with an `Error` to reject it.
  */
-export const socketAuth = (
-  socket: HandshakeSocket,
-  next: (err?: ExtendedError) => void,
-): void => {
+export const socketAuth = (socket: HandshakeSocket, next: (err?: ExtendedError) => void): void => {
   const token = extractToken(socket);
   if (token === undefined) {
     logger.warn(
@@ -107,10 +104,7 @@ export const socketAuth = (
     const payload = verifyToken(token);
     socket.data.userId = payload.sub;
     socket.data.email = payload.email;
-    logger.debug(
-      { socketId: socket.id, userId: payload.sub },
-      'Socket.io handshake authenticated',
-    );
+    logger.debug({ socketId: socket.id, userId: payload.sub }, 'Socket.io handshake authenticated');
     next();
   } catch (err) {
     logger.warn(

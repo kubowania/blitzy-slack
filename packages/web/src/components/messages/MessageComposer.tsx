@@ -287,11 +287,7 @@ export function MessageComposer({
           <div className="flex items-center justify-between px-2 py-1.5 border-t border-border">
             {/* Left cluster: emoji picker and file upload — the only in-scope
                 composer actions for this proof-of-concept. */}
-            <div
-              className="flex items-center gap-0.5"
-              role="toolbar"
-              aria-label="Composer actions"
-            >
+            <div className="flex items-center gap-0.5" role="toolbar" aria-label="Composer actions">
               <EmojiPicker
                 trigger={
                   <Button

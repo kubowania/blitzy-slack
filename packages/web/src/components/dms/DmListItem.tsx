@@ -36,13 +36,9 @@ function initialsFor(displayName: string): string {
  * match the current user). Falls back to the first participant if no match is
  * found (defensive — should not occur for a well-formed 1:1 DM).
  */
-function otherParticipantOf(
-  dm: DMWithParticipants,
-  currentUserId: string,
-): PublicUser | undefined {
+function otherParticipantOf(dm: DMWithParticipants, currentUserId: string): PublicUser | undefined {
   return (
-    dm.participants.find((participant) => participant.id !== currentUserId) ??
-    dm.participants[0]
+    dm.participants.find((participant) => participant.id !== currentUserId) ?? dm.participants[0]
   );
 }
 
@@ -81,17 +77,11 @@ export function DmListItem({
         <ItemMedia>
           <div className="relative">
             <Avatar className="size-7">
-              {avatarUrl !== null ? (
-                <AvatarImage src={avatarUrl} alt={displayName} />
-              ) : null}
+              {avatarUrl !== null ? <AvatarImage src={avatarUrl} alt={displayName} /> : null}
               <AvatarFallback>{initialsFor(displayName)}</AvatarFallback>
             </Avatar>
             {otherId !== '' ? (
-              <PresenceIndicator
-                userId={otherId}
-                size="sm"
-                className="absolute right-0 bottom-0"
-              />
+              <PresenceIndicator userId={otherId} size="sm" className="absolute right-0 bottom-0" />
             ) : null}
           </div>
         </ItemMedia>

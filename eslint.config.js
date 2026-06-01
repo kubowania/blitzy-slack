@@ -38,6 +38,9 @@ export default tseslint.config(
       'packages/db/src/generated/**',
       'packages/db/prisma/migrations/**',
       'packages/web/src/components/ui/**',
+      // Blitzy agent scratch & QA-evidence output (not application source); kept
+      // out of the lint gate so `make lint` reports the true project verdict.
+      'blitzy/**',
     ],
   },
 

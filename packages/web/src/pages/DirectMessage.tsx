@@ -180,11 +180,7 @@ export default function DirectMessage() {
         </div>
       </header>
 
-      <MessageList
-        dmId={dmId}
-        resolveDisplayName={resolveDisplayName}
-        className="flex-1 min-h-0"
-      />
+      <MessageList dmId={dmId} resolveDisplayName={resolveDisplayName} className="flex-1 min-h-0" />
       <TypingIndicator
         dmId={dmId}
         resolveDisplayName={resolveDisplayName}

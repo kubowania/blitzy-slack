@@ -83,10 +83,7 @@ export function StartDmDialog({
   const usersQuery = useQuery<PublicUser[], Error>({
     queryKey: ['users', 'search', debouncedQuery],
     queryFn: ({ signal }) =>
-      apiClient.get<PublicUser[]>(
-        `/api/users?q=${encodeURIComponent(debouncedQuery)}`,
-        { signal },
-      ),
+      apiClient.get<PublicUser[]>(`/api/users?q=${encodeURIComponent(debouncedQuery)}`, { signal }),
     enabled: open && token !== null,
     staleTime: 30_000,
   });
@@ -141,9 +138,7 @@ export function StartDmDialog({
       >
         <DialogHeader className="px-6 pt-6 pb-2">
           <DialogTitle>Start a direct message</DialogTitle>
-          <DialogDescription>
-            Search for a teammate to begin a 1:1 conversation.
-          </DialogDescription>
+          <DialogDescription>Search for a teammate to begin a 1:1 conversation.</DialogDescription>
         </DialogHeader>
         <Command shouldFilter={false} className="border-t">
           <CommandInput
@@ -191,11 +186,7 @@ interface UserCommandItemProps {
   onSelect: (user: PublicUser) => void;
 }
 
-function UserCommandItem({
-  user,
-  disabled,
-  onSelect,
-}: UserCommandItemProps): React.JSX.Element {
+function UserCommandItem({ user, disabled, onSelect }: UserCommandItemProps): React.JSX.Element {
   const handleSelect = React.useCallback((): void => {
     onSelect(user);
   }, [user, onSelect]);

@@ -33,11 +33,7 @@ import type {
 import { logger } from '../config/logger.js';
 import { ValidationError } from '../middleware/errors.js';
 
-import {
-  PAGE_SIZE,
-  MAX_PAGE_SIZE,
-  MAX_SEARCH_QUERY_LENGTH,
-} from '@app/shared/constants/limits';
+import { PAGE_SIZE, MAX_PAGE_SIZE, MAX_SEARCH_QUERY_LENGTH } from '@app/shared/constants/limits';
 import type { MessageWithAuthor } from '@app/shared/types/message';
 import type { SearchQueryInput } from '@app/shared/schemas/message';
 
@@ -206,9 +202,7 @@ function resolveLimit(input?: number): number {
  *   MAX_SEARCH_QUERY_LENGTH characters (a defensive layer behind the route's
  *   Zod validation).
  */
-export async function searchMessages(
-  input: SearchMessagesInput,
-): Promise<MessageWithAuthor[]> {
+export async function searchMessages(input: SearchMessagesInput): Promise<MessageWithAuthor[]> {
   const { userId } = input;
   const query = input.query.trim();
   const limit = resolveLimit(input.limit);
@@ -217,9 +211,7 @@ export async function searchMessages(
     throw new ValidationError('Search query must not be empty');
   }
   if (query.length > MAX_SEARCH_QUERY_LENGTH) {
-    throw new ValidationError(
-      `Search query exceeds ${MAX_SEARCH_QUERY_LENGTH} characters`,
-    );
+    throw new ValidationError(`Search query exceeds ${MAX_SEARCH_QUERY_LENGTH} characters`);
   }
 
   const startMs = Date.now();
