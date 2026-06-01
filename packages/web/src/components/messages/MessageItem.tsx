@@ -119,7 +119,11 @@ export function MessageItem({
       data-message-id={message.id}
       data-thread-reply={isThreadReply ? 'true' : 'false'}
       className={cn(
-        'group relative flex gap-3 px-4 py-1.5',
+        // `min-w-0` lets this row shrink below its intrinsic content width;
+        // long-string wrapping is enforced by `wrap-anywhere` on the body text
+        // below. Together they keep a long unbroken URL inside the ScrollArea
+        // viewport instead of widening the Radix scroll wrapper.
+        'group relative flex min-w-0 gap-3 px-4 py-1.5',
         'transition-colors hover:bg-muted/50',
         className,
       )}
@@ -168,8 +172,13 @@ export function MessageItem({
           </Tooltip>
         </div>
 
-        {/* Message body (plain text; multi-line + long words preserved) */}
-        <div className="whitespace-pre-wrap break-words text-sm text-foreground">
+        {/* Message body (plain text; newlines preserved via `whitespace-pre-wrap`).
+            `wrap-anywhere` (overflow-wrap: anywhere) breaks a long unbroken
+            string/URL AND shrinks the element's intrinsic min-content width, so
+            the Radix ScrollArea `display:table` wrapper stays at the viewport
+            width instead of growing to the unbroken string. Rationale:
+            /docs/decision-log.md. */}
+        <div className="whitespace-pre-wrap wrap-anywhere text-sm text-foreground">
           {message.content}
         </div>
 

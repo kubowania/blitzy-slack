@@ -351,6 +351,7 @@ export function RichTextEditor({
       <FormattingToolbar disabled={disabled} onFormat={handleFormat} />
       <Textarea
         ref={setRef}
+        name="message"
         value={value}
         onChange={handleChange}
         onKeyDown={handleKeyDown}

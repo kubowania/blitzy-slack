@@ -25,7 +25,9 @@
 
   --color-border: oklch(0.922 0 0);
   --color-input: oklch(0.922 0 0);
-  --color-ring: oklch(0.708 0 0);
+  /* Focus ring uses the Slack-primary accent (matches --color-primary below) so
+     focus-visible treatments echo the Slack reference; see /docs/decision-log.md. */
+  --color-ring: oklch(0.491 0.125 248);
 
   /* Modal / sheet overlay scrim (semantic token for Dialog/Sheet backdrops) */
   --color-overlay: oklch(0 0 0 / 0.5);
@@ -62,6 +64,20 @@
 }
 
 @layer base {
+  /* Tailwind CSS v4 changed the default border color of the bare `border`
+     utility from gray-200 to `currentColor`. This preflight reset restores the
+     v3 behaviour so that shadcn primitives using a bare `border`/`border-l`
+     (Card, Dialog, Popover, DropdownMenu, Sheet, …) render the light
+     `--color-border` hairline instead of a near-black border. Explicit
+     border-color utilities (border-input, border-border, border-transparent, …)
+     still win because they live in the higher utilities layer.
+     Rationale: /docs/decision-log.md. */
+  *,
+  ::before,
+  ::after {
+    border-color: var(--color-border);
+  }
+
   html {
     font-family: var(--font-sans);
     -webkit-font-smoothing: antialiased;

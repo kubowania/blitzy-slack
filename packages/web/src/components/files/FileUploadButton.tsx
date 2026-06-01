@@ -122,6 +122,7 @@ export function FileUploadButton({
       <input
         ref={inputRef}
         type="file"
+        name="file"
         accept={ACCEPTED_FILE_TYPES}
         onChange={handleFileChange}
         className="hidden"

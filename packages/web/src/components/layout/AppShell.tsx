@@ -26,7 +26,10 @@ import { cn } from '@/lib/utils';
  * scroll. `min-w-0` on the content column lets long unbroken content (such as a
  * URL in a message) shrink instead of widening the layout past the viewport.
  * The three-column structure is a desktop-only layout (the reference Slack web
- * screenshots are desktop captures); it does not collapse at small breakpoints.
+ * screenshots are desktop captures); a `min-w-[768px]` guard preserves those
+ * desktop proportions on narrower viewports, so the page scrolls horizontally
+ * below 768px instead of compressing the columns into an unusable width.
+ * Rationale: /docs/decision-log.md.
  *
  * A visually-hidden "Skip to main content" link is the first focusable element,
  * letting keyboard and screen-reader users jump past the nav rail and sidebar
@@ -51,7 +54,10 @@ export function AppShell({ className, ...props }: React.ComponentProps<'div'>) {
 
   return (
     <div
-      className={cn('flex h-screen overflow-hidden bg-background text-foreground', className)}
+      className={cn(
+        'flex h-screen min-w-[768px] overflow-hidden bg-background text-foreground',
+        className,
+      )}
       {...props}
     >
       <a
