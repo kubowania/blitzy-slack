@@ -36,17 +36,19 @@ The root `Makefile` is the single command surface — every operation routes thr
 | Target           | What it does                                                                                              |
 | ---------------- | --------------------------------------------------------------------------------------------------------- |
 | `make local`     | One-shot end-to-end local bring-up: Docker up → install → migrate → seed → start API and web dev servers. |
+| `make dev`       | Alias for `make local` (full end-to-end local bring-up).                                                  |
 | `make up`        | Starts the PostgreSQL 16 and Redis 7 containers via Docker Compose and waits until they are healthy.      |
 | `make down`      | Stops the Docker Compose services.                                                                        |
 | `make clean`     | Stops services and removes `node_modules`, build outputs, `uploads/`, coverage, and test reports.         |
 | `make install`   | Installs all workspace dependencies with pnpm.                                                            |
 | `make migrate`   | Applies all Prisma migrations to the database.                                                            |
 | `make seed`      | Seeds the test user via `POST /api/auth/register` (Rule 4).                                               |
+| `make db-studio` | Opens Prisma Studio against the dev database.                                                             |
 | `make build`     | Builds every workspace package for production.                                                            |
 | `make lint`      | Runs ESLint with `--max-warnings 0` across all workspaces (Rule 3).                                       |
 | `make format`    | Formats all source files with Prettier.                                                                   |
 | `make typecheck` | Type-checks every package with `tsc --noEmit`.                                                            |
-| `make test`      | Runs the Jest unit and integration test suites across all packages.                                       |
+| `make test`      | Runs the Jest unit/integration suites across packages, plus the full Playwright E2E suite.                |
 | `make test-e2e`  | Runs the Playwright end-to-end suite.                                                                     |
 
 Running `make` with no arguments (or `make help`) prints the full target list.
@@ -139,12 +141,12 @@ All configuration is via environment variables. Copy `.env.example` to `.env` be
 | `VITE_API_URL`     | Web → API base URL                                            | `http://localhost:3000`                                           |
 | `VITE_WS_URL`      | Web → Socket.io URL                                           | `http://localhost:3000`                                           |
 
-The root `.env.example` additionally defines Docker and tooling variables with working defaults — `POSTGRES_USER`, `POSTGRES_PASSWORD`, `POSTGRES_DB`, `POSTGRES_PORT`, `REDIS_PORT`, `API_PORT`, and `VITE_APP_URL`. See [`.env.example`](.env.example) for the complete annotated list.
+The root `.env.example` additionally defines Docker and tooling variables with working defaults — `POSTGRES_USER`, `POSTGRES_PASSWORD`, `POSTGRES_DB`, `POSTGRES_PORT`, `REDIS_PORT`, `PORT`, and `VITE_APP_URL`. See [`.env.example`](.env.example) for the complete annotated list.
 
 ## Testing
 
 ```bash
-make test            # Jest unit + integration tests across packages
+make test            # Jest unit/integration tests + Playwright E2E suite
 make test-e2e        # Playwright end-to-end suite
 ```
 

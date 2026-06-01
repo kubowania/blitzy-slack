@@ -23,7 +23,7 @@ PKG_WEB := @app/web
 
 help: ## Show all available targets
 	@echo "blitzy-slack — available make targets:"
-	@grep -E '^[a-zA-Z0-9_-]+:.*## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*## "} {printf "  \033[36m%-12s\033[0m %s\n", $$1, $$2}'
+	@grep -E '^[a-zA-Z0-9_-]+:.*## ' $(firstword $(MAKEFILE_LIST)) | awk 'BEGIN {FS = ":.*## "} {printf "  \033[36m%-12s\033[0m %s\n", $$1, $$2}'
 
 install: ## Install all workspace dependencies via pnpm (frozen lockfile)
 	@echo "→ Installing workspace dependencies (frozen lockfile)..."
