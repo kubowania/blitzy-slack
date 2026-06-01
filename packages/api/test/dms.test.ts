@@ -533,22 +533,40 @@ describe('Direct message routes — GET /api/dms, POST /api/dms, GET /api/dms/:i
         .expect(400);
     });
 
-    it('returns 400 for a limit below 1 or above MAX_PAGE_SIZE (Gate 12)', async () => {
-      const { token: aliceToken } = await registerUser();
+    it('rejects a non-positive limit with 400 but clamps an over-cap limit to MAX_PAGE_SIZE (Gate 12, §0.8.4)', async () => {
+      const { token: aliceToken, user: alice } = await registerUser();
       const { user: bob } = await registerUser();
       const dmId = await startDmReturningId(aliceToken, bob.id);
 
-      // limit must be a positive integer no greater than MAX_PAGE_SIZE (100);
-      // the schema rejects both a non-positive value and an over-cap value.
+      // A non-positive limit is still rejected with 400: `.int().positive()`
+      // runs before the clamp transform, so 0 / negatives / non-integers never
+      // reach it.
       await request(app)
         .get(`/api/dms/${dmId}/messages?limit=0`)
         .set('Authorization', `Bearer ${aliceToken}`)
         .expect(400);
 
-      await request(app)
+      // An over-cap limit is CLAMPED to MAX_PAGE_SIZE (capped, not rejected) per
+      // the AAP §0.8.4 pagination contract — matching the channel route and the
+      // thread-replies clamp. Seed >MAX_PAGE_SIZE messages so the clamp is
+      // observable: limit=MAX_PAGE_SIZE+50 yields exactly MAX_PAGE_SIZE (100)
+      // rows and a 200, not a 400.
+      await prismaTest.message.createMany({
+        data: Array.from({ length: 120 }, (_, i) => ({
+          content: `Message ${i}`,
+          authorId: alice.id,
+          dmId,
+          parentId: null,
+        })),
+      });
+
+      const response = await request(app)
         .get(`/api/dms/${dmId}/messages?limit=${MAX_PAGE_SIZE + 50}`)
         .set('Authorization', `Bearer ${aliceToken}`)
-        .expect(400);
+        .expect(200);
+
+      const body = response.body as DmMessagesPage;
+      expect(body.messages).toHaveLength(MAX_PAGE_SIZE);
     });
 
     it('returns at most PAGE_SIZE (50) messages by default and a forward cursor', async () => {

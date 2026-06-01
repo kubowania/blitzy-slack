@@ -92,8 +92,36 @@ type MessageSendAck = (response: MessageWithAuthor | { error: string }) => void;
  */
 export function registerMessageHandlers(io: AppServer, socket: AppSocket): void {
   socket.on(MESSAGE_SEND, (payload, ack) => {
-    void handleMessageSend(io, socket, payload, ack);
+    handleMessageSend(io, socket, payload, ack).catch((err: unknown) => {
+      logUnhandledRejection(socket, err);
+    });
   });
+}
+
+/**
+ * Last-resort logger for a rejection that escapes {@link handleMessageSend}'s
+ * own try/catch.
+ *
+ * The handler acknowledges and catches on every path, so a rejection reaching
+ * here is not expected; attaching this to the delegated promise guarantees any
+ * stray rejection is logged on the originating socket's context instead of
+ * escalating to a process-level `unhandledRejection` that would terminate the
+ * API and sever every other connected socket.
+ *
+ * @param socket - The originating socket (for `socketId` / `userId` context).
+ * @param err - The rejection value.
+ */
+function logUnhandledRejection(socket: AppSocket, err: unknown): void {
+  logger.error(
+    {
+      component: 'message.handler',
+      event: MESSAGE_SEND,
+      socketId: socket.id,
+      userId: socket.data.userId,
+      err: err instanceof Error ? err.message : String(err),
+    },
+    'message:send delegate rejected',
+  );
 }
 
 /**
@@ -170,6 +198,10 @@ async function handleMessageSend(
 ): Promise<void> {
   const start = Date.now();
   const userId = socket.data.userId;
+  // A non-conforming client may emit `message:send` without an acknowledgement
+  // callback, in which case `ack` is `undefined`. Normalize to a no-op so
+  // neither the success nor the error path below throws "ack is not a function".
+  const safeAck: MessageSendAck = typeof ack === 'function' ? ack : () => undefined;
   try {
     const validated = sendMessageSchema.parse(rawPayload);
 
@@ -200,7 +232,7 @@ async function handleMessageSend(
       }
     }
 
-    ack(message);
+    safeAck(message);
 
     logger.info(
       {
@@ -218,7 +250,7 @@ async function handleMessageSend(
       'message sent',
     );
   } catch (err: unknown) {
-    handleError(socket, userId, ack, start, err);
+    handleError(socket, userId, safeAck, start, err);
   }
 }
 

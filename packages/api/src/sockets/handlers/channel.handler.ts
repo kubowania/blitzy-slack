@@ -89,12 +89,43 @@ type ChannelAck = (ok: boolean) => void;
  */
 export function registerChannelHandlers(io: AppServer, socket: AppSocket): void {
   socket.on(CHANNEL_JOIN, (channelId, ack) => {
-    void handleChannelJoin(io, socket, channelId, ack);
+    handleChannelJoin(io, socket, channelId, ack).catch((err: unknown) => {
+      logUnhandledRejection(socket, CHANNEL_JOIN, err);
+    });
   });
 
   socket.on(CHANNEL_LEAVE, (channelId, ack) => {
-    void handleChannelLeave(io, socket, channelId, ack);
+    handleChannelLeave(io, socket, channelId, ack).catch((err: unknown) => {
+      logUnhandledRejection(socket, CHANNEL_LEAVE, err);
+    });
   });
+}
+
+/**
+ * Last-resort logger for a rejection that escapes a channel handler's own
+ * try/catch.
+ *
+ * Each handler acknowledges and catches on every path, so a rejection reaching
+ * here is not expected; attaching this to the delegated promise guarantees any
+ * stray rejection is logged on the originating socket's context instead of
+ * escalating to a process-level `unhandledRejection` that would terminate the
+ * API and sever every other connected socket.
+ *
+ * @param socket - The originating socket (for `socketId` / `userId` context).
+ * @param event - The inbound event name whose delegate rejected.
+ * @param err - The rejection value.
+ */
+function logUnhandledRejection(socket: AppSocket, event: string, err: unknown): void {
+  logger.error(
+    {
+      component: 'channel.handler',
+      event,
+      socketId: socket.id,
+      userId: socket.data.userId,
+      err: err instanceof Error ? err.message : String(err),
+    },
+    `${event} delegate rejected`,
+  );
 }
 
 /**
@@ -128,6 +159,10 @@ async function handleChannelJoin(
 ): Promise<void> {
   const start = Date.now();
   const userId = socket.data.userId;
+  // A non-conforming client may emit `channel:join` without an acknowledgement
+  // callback, in which case `ack` is `undefined`. Normalize to a no-op so
+  // neither the success nor the error path below throws "ack is not a function".
+  const safeAck: ChannelAck = typeof ack === 'function' ? ack : () => undefined;
   try {
     const validated = joinChannelSchema.parse({ channelId });
 
@@ -135,7 +170,7 @@ async function handleChannelJoin(
 
     await socket.join(channelRoom(validated.channelId));
 
-    ack(true);
+    safeAck(true);
 
     logger.info(
       {
@@ -150,7 +185,7 @@ async function handleChannelJoin(
     );
   } catch (err: unknown) {
     handleError(socket, CHANNEL_JOIN, userId, channelId, start, err);
-    ack(false);
+    safeAck(false);
   }
 }
 
@@ -183,12 +218,16 @@ async function handleChannelLeave(
 ): Promise<void> {
   const start = Date.now();
   const userId = socket.data.userId;
+  // A non-conforming client may emit `channel:leave` without an acknowledgement
+  // callback, in which case `ack` is `undefined`. Normalize to a no-op so
+  // neither the success nor the error path below throws "ack is not a function".
+  const safeAck: ChannelAck = typeof ack === 'function' ? ack : () => undefined;
   try {
     const validated = joinChannelSchema.parse({ channelId });
 
     await socket.leave(channelRoom(validated.channelId));
 
-    ack(true);
+    safeAck(true);
 
     logger.info(
       {
@@ -203,7 +242,7 @@ async function handleChannelLeave(
     );
   } catch (err: unknown) {
     handleError(socket, CHANNEL_LEAVE, userId, channelId, start, err);
-    ack(false);
+    safeAck(false);
   }
 }
 

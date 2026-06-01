@@ -35,8 +35,9 @@
  * assigned-file prompt's illustrative sketch. The verified differences —
  * GET /:id/messages returns a `{ messages, nextCursor }` envelope (there is NO
  * `hasMore` field; "more remains" is expressed by a non-null `nextCursor`); a
- * `limit` above MAX_PAGE_SIZE is REJECTED with 400 by the query schema (not
- * silently capped); POST /:id/join is idempotent and returns 200 (never 409);
+ * `limit` above MAX_PAGE_SIZE is CLAMPED to MAX_PAGE_SIZE by the query schema
+ * (capped, not rejected) per §0.8.4; POST /:id/join is idempotent and returns
+ * 200 (never 409);
  * and the channel routes emit no Socket.io events so no `io` stub is required —
  * are recorded in /docs/decision-log.md per the Explainability rule (AAP §0.8.3),
  * not in these comments.
@@ -720,22 +721,32 @@ describe('Channel routes — GET/POST /api/channels, POST /:id/join, POST /:id/l
       expect(body.messages).toHaveLength(MAX_PAGE_SIZE);
     });
 
-    it('rejects a limit above MAX_PAGE_SIZE with 400 (or caps it by implementation choice)', async () => {
-      const { token } = await registerUser();
+    it('clamps a limit above MAX_PAGE_SIZE to MAX_PAGE_SIZE (capped, not rejected) (§0.8.4)', async () => {
+      const { token, user } = await registerUser();
       const channelId = await createChannelReturningId(token, false);
 
+      // Seed >MAX_PAGE_SIZE messages so the clamp is observable: an over-cap
+      // limit returns exactly MAX_PAGE_SIZE rows rather than the requested 999.
+      await prismaTest.message.createMany({
+        data: Array.from({ length: 120 }, (_, i) => ({
+          content: `Message ${i}`,
+          authorId: user.id,
+          channelId,
+          parentId: null,
+        })),
+      });
+
+      // Per the AAP §0.8.4 pagination contract the schema CLAMPS an over-cap
+      // `limit` to MAX_PAGE_SIZE and returns 200 (it does NOT reject with 400);
+      // a non-positive / non-integer limit is still rejected by `.positive()` /
+      // `.int()`, which run before the clamp transform (asserted elsewhere).
       const response = await request(app)
         .get(`/api/channels/${channelId}/messages?limit=999`)
-        .set('Authorization', `Bearer ${token}`);
+        .set('Authorization', `Bearer ${token}`)
+        .expect(200);
 
-      // The implemented query schema caps `limit` at MAX_PAGE_SIZE and REJECTS a
-      // larger value with 400; the accept-list tolerates a future
-      // silent-cap implementation without a false failure.
-      expect([200, 400]).toContain(response.status);
-      if (response.status === 200) {
-        const body = response.body as ChannelMessagesPage;
-        expect(body.messages.length).toBeLessThanOrEqual(MAX_PAGE_SIZE);
-      }
+      const body = response.body as ChannelMessagesPage;
+      expect(body.messages).toHaveLength(MAX_PAGE_SIZE);
     });
 
     it('paginates with the opaque cursor across two non-overlapping pages (50 then 25)', async () => {

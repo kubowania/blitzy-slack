@@ -68,15 +68,21 @@ const dmIdParamsSchema = z.object({ id: z.string().cuid() }).strict();
 
 /**
  * Validates the message-history query string. `cursor` is the opaque token
- * echoed back from a previous page; `limit` is coerced from its string form,
- * must be a positive integer, and is capped at `MAX_PAGE_SIZE` server-side.
- * Both are optional — the first page omits the cursor and falls back to
- * `PAGE_SIZE`.
+ * echoed back from a previous page; `limit` is coerced from its string form and
+ * must be a positive integer. Values above `MAX_PAGE_SIZE` are clamped down to
+ * `MAX_PAGE_SIZE` server-side (capped, not rejected) per the AAP §0.8.4
+ * pagination contract. Both are optional — the first page omits the cursor and
+ * falls back to `PAGE_SIZE`.
  */
 const dmMessagesQuerySchema = z
   .object({
     cursor: z.string().optional(),
-    limit: z.coerce.number().int().positive().max(MAX_PAGE_SIZE).optional(),
+    limit: z.coerce
+      .number()
+      .int()
+      .positive()
+      .transform((n) => Math.min(n, MAX_PAGE_SIZE))
+      .optional(),
   })
   .strict();
 

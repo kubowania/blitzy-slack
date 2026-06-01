@@ -121,6 +121,18 @@ interface UntypedEventEmitter {
   off(event: string, listener: (...args: unknown[]) => void): void;
 }
 
+/**
+ * Minimal structural view of a socket's `.emit` used to emit an ack-bearing
+ * event WITHOUT supplying the acknowledgement callback. The typed client's
+ * `.emit` requires the ack argument for `channel:join` / `channel:leave` /
+ * `message:send`, so a non-conforming (ack-less) emit is routed through this
+ * interface via a double cast. No `any` is introduced, so the `no-unsafe-*`
+ * rules remain satisfied (Rule 3).
+ */
+interface UntypedEmitter {
+  emit(event: string, ...args: unknown[]): void;
+}
+
 // ---------------------------------------------------------------------------
 // Server / client harness
 // ---------------------------------------------------------------------------
@@ -546,6 +558,37 @@ describe('Socket.io integration (real-time WebSocket layer)', () => {
 
       const sockets = await server.io.in(`channel:${channel.id}`).fetchSockets();
       expect(sockets).toHaveLength(0);
+    });
+  });
+
+  describe('ack resilience (no-ack emits must not crash the server)', () => {
+    it('tolerates channel:join, channel:leave, and message:send emitted without an ack callback', async () => {
+      const { token, user } = await registerUser();
+      const channel = await createTestChannel({ token, isPrivate: false });
+      const client = await connectAndTrack(signTestToken({ sub: user.id, email: user.email }));
+
+      // Emit each ack-bearing event with NO acknowledgement callback. A missing
+      // ack previously threw "ack is not a function" inside the handler's catch
+      // block, which — because the handler is delegated fire-and-forget —
+      // surfaced as a process-terminating unhandledRejection. Routed through an
+      // untyped emitter because the typed event map requires the ack argument
+      // (Rule 3: no @ts-ignore).
+      const untyped = client as unknown as UntypedEmitter;
+      untyped.emit(SOCKET_EVENTS.CHANNEL_JOIN, channel.id);
+      untyped.emit(SOCKET_EVENTS.CHANNEL_LEAVE, channel.id);
+      untyped.emit(SOCKET_EVENTS.MESSAGE_SEND, { content: 'no-ack send', channelId: channel.id });
+
+      // The server must remain alive and handling events: a follow-up ack'd join
+      // resolves true. If a no-ack emit had crashed the process, the socket would
+      // have dropped and this would time out instead of acking.
+      const ok = await emitChannelJoin(client, channel.id);
+      expect(ok).toBe(true);
+      expect(client.connected).toBe(true);
+
+      // And the originating socket ends up subscribed to the channel room,
+      // proving the ack'd join ran end-to-end after the no-ack traffic.
+      const sockets = await server.io.in(`channel:${channel.id}`).fetchSockets();
+      expect(sockets).toHaveLength(1);
     });
   });
 
