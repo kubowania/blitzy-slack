@@ -98,6 +98,25 @@ export default function DirectMessage() {
     emit('dm:join', dmId);
   }, [dmId, isConnected, emit]);
 
+  // Maps a user id to its display name from the participants of the user's
+  // loaded DMs. Drives the named typing indicator ("Alice is typing…",
+  // AAP §0.1.1) and named reactor tooltips on reaction chips (AAP §0.5.2).
+  // Memoized on the DM list so it stays referentially stable; declared before
+  // the early returns to satisfy the Rules of Hooks.
+  const resolveDisplayName = React.useCallback(
+    (userId: string): string | undefined => {
+      for (const conversation of dms) {
+        for (const participant of conversation.participants) {
+          if (participant.id === userId) {
+            return participant.displayName;
+          }
+        }
+      }
+      return undefined;
+    },
+    [dms],
+  );
+
   if (dmId === undefined) {
     return <Navigate to="/app" replace />;
   }
@@ -161,8 +180,16 @@ export default function DirectMessage() {
         </div>
       </header>
 
-      <MessageList dmId={dmId} className="flex-1 min-h-0" />
-      <TypingIndicator dmId={dmId} className="shrink-0 px-6" />
+      <MessageList
+        dmId={dmId}
+        resolveDisplayName={resolveDisplayName}
+        className="flex-1 min-h-0"
+      />
+      <TypingIndicator
+        dmId={dmId}
+        resolveDisplayName={resolveDisplayName}
+        className="shrink-0 px-6"
+      />
       <MessageComposer
         dmId={dmId}
         scopeName={other?.displayName ?? 'this conversation'}

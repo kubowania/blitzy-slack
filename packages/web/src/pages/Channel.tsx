@@ -56,6 +56,19 @@ export default function Channel() {
     });
   }, [channelId, isConnected, emit]);
 
+  // Maps a user id to its display name from the channel's hydrated member list.
+  // Drives named typing indicators ("Alice is typing…", AAP §0.1.1) and named
+  // reactor tooltips on reaction chips (AAP §0.5.2). Memoized on the member
+  // list so it stays referentially stable across unrelated re-renders. Declared
+  // before the early returns to satisfy the Rules of Hooks (`channel` may be
+  // undefined while the detail query is in flight).
+  const members = channel?.members;
+  const resolveDisplayName = React.useCallback(
+    (userId: string): string | undefined =>
+      members?.find((member) => member.user.id === userId)?.user.displayName,
+    [members],
+  );
+
   if (channelId === undefined) {
     return <Navigate to="/app" replace />;
   }
@@ -94,8 +107,16 @@ export default function Channel() {
   return (
     <div className="flex h-full flex-col bg-background">
       <ChannelHeader channel={channel} />
-      <MessageList channelId={channelId} className="flex-1 min-h-0" />
-      <TypingIndicator channelId={channelId} className="shrink-0 px-6" />
+      <MessageList
+        channelId={channelId}
+        resolveDisplayName={resolveDisplayName}
+        className="flex-1 min-h-0"
+      />
+      <TypingIndicator
+        channelId={channelId}
+        resolveDisplayName={resolveDisplayName}
+        className="shrink-0 px-6"
+      />
       <MessageComposer
         channelId={channelId}
         scopeName={channel.name}

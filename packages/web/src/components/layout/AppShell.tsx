@@ -4,8 +4,9 @@ import { Outlet } from 'react-router';
 import { Header } from '@/components/layout/Header';
 import { Sidebar } from '@/components/layout/Sidebar';
 import { WorkspaceNavRail } from '@/components/layout/WorkspaceNavRail';
-import { useInitPresence } from '@/hooks/usePresence';
+import { useHydratePresence, useInitPresence } from '@/hooks/usePresence';
 import { useConnectSocket } from '@/hooks/useSocket';
+import { useDms } from '@/hooks/useDms';
 import { cn } from '@/lib/utils';
 
 /**
@@ -51,6 +52,22 @@ import { cn } from '@/lib/utils';
 export function AppShell({ className, ...props }: React.ComponentProps<'div'>) {
   useConnectSocket();
   useInitPresence();
+
+  // Hydrate presence for everyone shown in the sidebar's Direct Messages list
+  // so their dots reflect the authoritative Redis-computed state on first paint
+  // (AAP §0.6.2) instead of defaulting to offline until a transition broadcast
+  // arrives. De-duplicated by the order-independent id set inside the hook.
+  const { dms } = useDms();
+  const dmParticipantIds = React.useMemo<string[]>(() => {
+    const ids = new Set<string>();
+    for (const dm of dms) {
+      for (const participant of dm.participants) {
+        ids.add(participant.id);
+      }
+    }
+    return [...ids];
+  }, [dms]);
+  useHydratePresence(dmParticipantIds);
 
   return (
     <div

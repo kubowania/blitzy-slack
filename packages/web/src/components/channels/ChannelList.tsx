@@ -29,6 +29,8 @@ export interface ChannelListProps {
  */
 export function ChannelList({ className }: ChannelListProps): React.JSX.Element {
   const [isCreateDialogOpen, setIsCreateDialogOpen] = React.useState<boolean>(false);
+  // Ref to the "+" trigger so the dialog can restore focus to it on close.
+  const createTriggerRef = React.useRef<HTMLButtonElement | null>(null);
   const { channels, isLoading, error } = useChannels();
 
   const showEmpty = !isLoading && error === null && channels.length === 0;
@@ -41,6 +43,7 @@ export function ChannelList({ className }: ChannelListProps): React.JSX.Element 
           Channels
         </h2>
         <Button
+          ref={createTriggerRef}
           type="button"
           variant="ghost"
           size="icon"
@@ -95,7 +98,11 @@ export function ChannelList({ className }: ChannelListProps): React.JSX.Element 
         </ul>
       ) : null}
 
-      <CreateChannelDialog open={isCreateDialogOpen} onOpenChange={setIsCreateDialogOpen} />
+      <CreateChannelDialog
+        open={isCreateDialogOpen}
+        onOpenChange={setIsCreateDialogOpen}
+        triggerRef={createTriggerRef}
+      />
     </section>
   );
 }

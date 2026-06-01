@@ -30,6 +30,13 @@ import type { PublicUser } from '@app/shared/types/user';
 export interface StartDmDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
+  /**
+   * Ref to the control that opens the dialog. Because the dialog is opened
+   * programmatically (not via a Radix `DialogTrigger`), focus is explicitly
+   * restored to this element on close so keyboard users return to the trigger
+   * (WAI-ARIA dialog pattern) instead of being dropped to the document body.
+   */
+  triggerRef?: React.RefObject<HTMLButtonElement | null>;
 }
 
 const SEARCH_DEBOUNCE_MS = 200;
@@ -47,6 +54,7 @@ function initialsFor(displayName: string): string {
 export function StartDmDialog({
   open,
   onOpenChange,
+  triggerRef,
 }: StartDmDialogProps): React.JSX.Element {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
@@ -118,7 +126,19 @@ export function StartDmDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent data-slot="start-dm-dialog" className="p-0 sm:max-w-lg">
+      <DialogContent
+        data-slot="start-dm-dialog"
+        className="p-0 sm:max-w-lg"
+        onCloseAutoFocus={(event) => {
+          // The dialog is opened programmatically (no Radix DialogTrigger), so
+          // restore focus to the opening control ourselves on close. Without
+          // this, focus falls to document.body and keyboard users lose place.
+          if (triggerRef?.current) {
+            event.preventDefault();
+            triggerRef.current.focus();
+          }
+        }}
+      >
         <DialogHeader className="px-6 pt-6 pb-2">
           <DialogTitle>Start a direct message</DialogTitle>
           <DialogDescription>

@@ -26,25 +26,39 @@ export function SearchBar({ className, placeholder, initialQuery, debounceMs }: 
     mode: 'onChange',
   });
 
-  const query = form.watch('q');
+  // Debounce timer for search-as-you-type. Held in a ref so it survives
+  // re-renders and is cleared on unmount. Navigation fires ONLY from a user
+  // keystroke (onChange) or submit (Enter) — never from a location-driven
+  // re-render — so leaving /app/search does not bounce the user back.
+  const debounceRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
 
   React.useEffect(() => {
-    const trimmed = query.trim();
-    if (trimmed.length === 0) {
-      return;
-    }
-    const handle = setTimeout(() => {
+    return () => {
+      if (debounceRef.current !== null) {
+        clearTimeout(debounceRef.current);
+      }
+    };
+  }, []);
+
+  const goToSearch = React.useCallback(
+    (raw: string): void => {
+      const trimmed = raw.trim();
+      if (trimmed.length === 0) {
+        return;
+      }
       void navigate(`/app/search?q=${encodeURIComponent(trimmed)}`);
-    }, effectiveDebounceMs);
-    return () => clearTimeout(handle);
-  }, [query, effectiveDebounceMs, navigate]);
+    },
+    [navigate],
+  );
+
+  const registration = form.register('q');
 
   const onSubmit = form.handleSubmit((data) => {
-    const trimmed = data.q.trim();
-    if (trimmed.length === 0) {
-      return;
+    if (debounceRef.current !== null) {
+      clearTimeout(debounceRef.current);
+      debounceRef.current = null;
     }
-    void navigate(`/app/search?q=${encodeURIComponent(trimmed)}`);
+    goToSearch(data.q);
   });
 
   return (
@@ -64,7 +78,18 @@ export function SearchBar({ className, placeholder, initialQuery, debounceMs }: 
         autoComplete="off"
         spellCheck={false}
         className="pl-9"
-        {...form.register('q')}
+        {...registration}
+        onChange={(event) => {
+          void registration.onChange(event);
+          const value = event.target.value;
+          if (debounceRef.current !== null) {
+            clearTimeout(debounceRef.current);
+          }
+          debounceRef.current = setTimeout(() => {
+            debounceRef.current = null;
+            goToSearch(value);
+          }, effectiveDebounceMs);
+        }}
       />
     </form>
   );

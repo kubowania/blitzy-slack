@@ -11,10 +11,10 @@ import {
   EmptyMedia,
   EmptyTitle,
 } from '@/components/ui/empty';
-import { Spinner } from '@/components/ui/spinner';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { MessageItem } from './MessageItem';
 import { useMessages } from '@/hooks/useMessages';
+import { useHydratePresence } from '@/hooks/usePresence';
 import { cn } from '@/lib/utils';
 
 import type { MessageWithAuthor } from '@app/shared/types/message';
@@ -55,6 +55,14 @@ export interface MessageListProps {
   messagesOverride?: readonly MessageWithAuthor[];
   /** Optional empty-state title customization. Defaults to "No messages yet". */
   emptyLabel?: string;
+  /**
+   * Optional resolver mapping a user id to a display name. Threaded down to
+   * each reaction chip so its tooltip can name the reactors (AAP §0.5.2)
+   * instead of showing a bare count. Supplied by the channel/DM page from its
+   * member/participant list; when absent (e.g. the thread panel), reaction
+   * chips fall back to a count-based label.
+   */
+  resolveDisplayName?: (userId: string) => string | undefined;
   /** Optional className applied to the outer container. */
   className?: string;
 }
@@ -192,11 +200,17 @@ function BeginningOfChannel(): React.JSX.Element {
  * screenshots/Slack web Jul 2024 100.png (Rule 1).
  *
  * Renders, in order: a top sentinel that the {@link useMessages} observer uses
- * to load older pages, a paging spinner, a "beginning of channel" banner once
+ * to load older pages, a paging skeleton, a "beginning of channel" banner once
  * exhausted, then the messages themselves with date separators injected at
  * each calendar-day boundary. Falls back to a skeleton list during the initial
  * fetch, a shadcn `Empty` state when there are no messages, and a destructive
  * `Alert` when the fetch errors.
+ *
+ * On initial load (and on channel/DM switch) the viewport is positioned at the
+ * newest message and stays pinned to the bottom for live arrivals; older pages
+ * prepended on scroll-up are scroll-anchored so the reading position is
+ * preserved (AAP §0.6.3, Rule 1). This scroll management is active in live mode
+ * only — thread/override mode renders a supplied array and is left untouched.
  *
  * Real-time delivery (Rule 2) is handled inside {@link useMessages} via
  * `setQueryData` (never polling, never `invalidate`), preserving the &lt;500ms
@@ -208,6 +222,7 @@ export function MessageList({
   parentMessageId,
   messagesOverride,
   emptyLabel,
+  resolveDisplayName,
   className,
 }: MessageListProps): React.JSX.Element {
   // When `messagesOverride` is supplied we bypass the data hook entirely.
@@ -242,6 +257,121 @@ export function MessageList({
   );
 
   const messageCount = displayMessages.length;
+
+  // Hydrate presence for every author currently rendered in the timeline so
+  // their avatar dots reflect the authoritative Redis-computed state on first
+  // paint (AAP §0.6.2), not a stale default. The hook de-duplicates by the
+  // order-independent id set, so re-renders with the same authors do not
+  // refetch. Must run before any early return (Rules of Hooks).
+  const authorIds = React.useMemo<string[]>(() => {
+    const ids = new Set<string>();
+    for (const message of displayMessages) {
+      ids.add(message.author.id);
+    }
+    return [...ids];
+  }, [displayMessages]);
+  useHydratePresence(authorIds);
+
+  // ===== Scroll management (live mode only) =====
+  // The timeline must open on the NEWEST message and keep the user pinned to
+  // the bottom for live arrivals, while preserving position when older pages
+  // are prepended (AAP §0.6.3, Rule 1 Slack parity). Thread/override mode is
+  // deliberately excluded — it nests its own ScrollArea and is verified-correct.
+  const viewportRef = React.useRef<HTMLDivElement | null>(null);
+  const positionedScopeRef = React.useRef<string | null>(null);
+  const prevBottomIdRef = React.useRef<string | null>(null);
+  const distanceFromBottomRef = React.useRef<number>(0);
+  const isNearBottomRef = React.useRef<boolean>(true);
+  const detachScrollRef = React.useRef<(() => void) | null>(null);
+  const [hasReachedBottom, setHasReachedBottom] = React.useState<boolean>(false);
+
+  // Scope key: changing channel/DM (or thread parent) must re-anchor to the
+  // newest message. Used to detect a scope switch in the layout effect.
+  const scopeKey = useOverride
+    ? `thread:${parentMessageId ?? ''}`
+    : channelId !== undefined
+      ? `channel:${channelId}`
+      : `dm:${dmId ?? ''}`;
+
+  // Id of the newest (bottom-most) message; oldest-first order means the last
+  // element is newest. A change signals a new arrival appended at the bottom.
+  const bottomId = messageCount > 0 ? (displayMessages[messageCount - 1]?.id ?? null) : null;
+
+  // Callback ref on the scroll viewport. Re-attaches a passive scroll listener
+  // whenever the underlying node changes (e.g. loading -> loaded remount), and
+  // flags the new node as needing (re)positioning to the bottom.
+  const setViewport = React.useCallback((node: HTMLDivElement | null): void => {
+    if (detachScrollRef.current !== null) {
+      detachScrollRef.current();
+      detachScrollRef.current = null;
+    }
+    viewportRef.current = node;
+    positionedScopeRef.current = null;
+    if (node !== null) {
+      const onScroll = (): void => {
+        const distance = node.scrollHeight - node.scrollTop - node.clientHeight;
+        distanceFromBottomRef.current = distance;
+        isNearBottomRef.current = distance < 120;
+      };
+      node.addEventListener('scroll', onScroll, { passive: true });
+      detachScrollRef.current = (): void => {
+        node.removeEventListener('scroll', onScroll);
+      };
+    }
+  }, []);
+
+  // Detach the scroll listener on unmount.
+  React.useEffect(() => {
+    return () => {
+      if (detachScrollRef.current !== null) {
+        detachScrollRef.current();
+        detachScrollRef.current = null;
+      }
+    };
+  }, []);
+
+  // Position the viewport synchronously before paint to avoid a visible jump.
+  React.useLayoutEffect(() => {
+    if (useOverride) {
+      return;
+    }
+    const viewport = viewportRef.current;
+    if (viewport === null || messageCount === 0) {
+      return;
+    }
+
+    const needsInitialPosition = positionedScopeRef.current !== scopeKey;
+    const bottomChanged = bottomId !== prevBottomIdRef.current;
+
+    if (needsInitialPosition) {
+      // Initial open / channel switch: land on the newest message rather than
+      // the oldest, then enable the top sentinel for older-page loading.
+      viewport.scrollTop = viewport.scrollHeight;
+      positionedScopeRef.current = scopeKey;
+      if (!hasReachedBottom) {
+        setHasReachedBottom(true);
+      }
+    } else if (bottomChanged) {
+      // A new newest message arrived: follow it only when the user is already
+      // near the bottom, so reading older history is never interrupted.
+      if (isNearBottomRef.current) {
+        viewport.scrollTop = viewport.scrollHeight;
+      }
+    } else {
+      // Newest message unchanged but height grew: the growth came from the TOP
+      // (an older page prepended, or the paging skeleton). Preserve the user's
+      // distance from the bottom so the viewport stays scroll-anchored.
+      const target = viewport.scrollHeight - viewport.clientHeight - distanceFromBottomRef.current;
+      const clamped = target < 0 ? 0 : target;
+      if (Math.abs(clamped - viewport.scrollTop) > 1) {
+        viewport.scrollTop = clamped;
+      }
+    }
+
+    distanceFromBottomRef.current = viewport.scrollHeight - viewport.scrollTop - viewport.clientHeight;
+    isNearBottomRef.current = distanceFromBottomRef.current < 120;
+    prevBottomIdRef.current = bottomId;
+  }, [useOverride, scopeKey, messageCount, bottomId, hasReachedBottom]);
 
   // ===== Empty state — no messages and nothing in flight or errored. =====
   if (!isLoading && error === null && messageCount === 0) {
@@ -292,7 +422,11 @@ export function MessageList({
 
   // ===== Main timeline. =====
   return (
-    <ScrollArea data-slot="message-list" className={cn('h-full', className)}>
+    <ScrollArea
+      data-slot="message-list"
+      viewportRef={useOverride ? undefined : setViewport}
+      className={cn('h-full', className)}
+    >
       {/* Accessible live region: announces Socket.io-delivered messages to
           screen readers as they arrive. `role="log"` marks an append-only
           chat timeline; `aria-live="polite"` queues announcements without
@@ -308,15 +442,25 @@ export function MessageList({
         className="flex flex-col py-2"
       >
         {/* Top sentinel: the useMessages IntersectionObserver attaches here to
-            load older pages when the user scrolls up. Live mode only. */}
-        {sentinelRef !== null && hasNextPage ? (
+            load older pages when the user scrolls up. Live mode only, and only
+            once the timeline has been positioned at the bottom — otherwise the
+            sentinel sits in view on mount and eagerly loads the entire history
+            (AAP §0.6.3). */}
+        {sentinelRef !== null && hasNextPage && hasReachedBottom ? (
           <div ref={sentinelRef} data-slot="message-list-sentinel" className="h-1" />
         ) : null}
 
-        {/* Pagination spinner while an older page is being fetched. */}
+        {/* Skeleton placeholders while an older page is being fetched, matching
+            the initial-load loader (AAP §0.6.3: "loader displays a shadcn
+            Skeleton"). */}
         {isFetchingNextPage ? (
-          <div className="flex justify-center py-2" data-slot="message-list-paging">
-            <Spinner />
+          <div
+            className="flex flex-col gap-3 py-2"
+            data-slot="message-list-paging"
+            aria-busy="true"
+          >
+            <MessageSkeleton />
+            <MessageSkeleton />
           </div>
         ) : null}
 
@@ -333,6 +477,7 @@ export function MessageList({
               message={row.message}
               hideThreadActions={parentMessageId !== undefined}
               isThreadReply={parentMessageId !== undefined}
+              resolveDisplayName={resolveDisplayName}
             />
           );
         })}

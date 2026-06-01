@@ -42,6 +42,14 @@ export interface CreateChannelDialogProps {
   open: boolean;
   /** Invoked on backdrop click, the close `X`, Escape, Cancel, or after a successful create. */
   onOpenChange: (open: boolean) => void;
+  /**
+   * Ref to the control that opens the dialog. Because the dialog is opened
+   * programmatically (not via a Radix `DialogTrigger`), focus is explicitly
+   * restored to this element when the dialog closes — so keyboard and
+   * screen-reader users return to the trigger (WAI-ARIA dialog pattern) instead
+   * of being dropped to the document body.
+   */
+  triggerRef?: React.RefObject<HTMLButtonElement | null>;
 }
 
 /**
@@ -73,6 +81,7 @@ const IS_PRIVATE_FIELD_ID = 'create-channel-isPrivate';
 export function CreateChannelDialog({
   open,
   onOpenChange,
+  triggerRef,
 }: CreateChannelDialogProps): React.JSX.Element {
   const navigate = useNavigate();
   const nameInputRef = React.useRef<HTMLInputElement | null>(null);
@@ -131,7 +140,19 @@ export function CreateChannelDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-lg">
+      <DialogContent
+        className="sm:max-w-lg"
+        onCloseAutoFocus={(event) => {
+          // The dialog is opened programmatically (no Radix DialogTrigger), so
+          // restore focus to the opening control ourselves on close (Esc,
+          // backdrop, X, Cancel, or success). Without this, focus falls to
+          // document.body and keyboard users lose their place.
+          if (triggerRef?.current) {
+            event.preventDefault();
+            triggerRef.current.focus();
+          }
+        }}
+      >
         <DialogHeader>
           <DialogTitle>Create a channel</DialogTitle>
           <DialogDescription>

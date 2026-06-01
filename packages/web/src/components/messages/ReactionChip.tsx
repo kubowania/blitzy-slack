@@ -4,6 +4,7 @@ import { useMutation, useQueryClient } from '@tanstack/react-query';
 import type { ReactionSummary } from '@app/shared/types/message';
 
 import { Button } from '@/components/ui/button';
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { cn } from '@/lib/utils';
 import { apiClient, type ApiError } from '@/lib/api-client';
 
@@ -15,8 +16,39 @@ export interface ReactionChipProps {
   messageId: string;
   /** The aggregated reaction summary (server-computed). */
   reaction: ReactionSummary;
+  /**
+   * Optional resolver mapping a reactor's user id to a display name. When
+   * supplied (and at least one id resolves) the chip's tooltip names the
+   * reactors ("Alice and Bob reacted with 👍", AAP §0.5.2); otherwise it falls
+   * back to a count-based label.
+   */
+  resolveDisplayName?: (userId: string) => string | undefined;
   /** Optional className for the outer button element. */
   className?: string;
+}
+
+/**
+ * Formats a list of reactor display names into a natural-language sentence
+ * naming who reacted with the emoji — "Alice reacted with 👍", "Alice and Bob
+ * reacted with 👍", "Alice, Bob, and Carol reacted with 👍", or "Alice, Bob,
+ * and 3 others reacted with 👍" for four or more. Defensive `?? ''` guards
+ * satisfy `noUncheckedIndexedAccess` (array element access is `string |
+ * undefined`).
+ */
+function formatReactors(names: readonly string[], emoji: string): string {
+  const verb = `reacted with ${emoji}`;
+  if (names.length === 1) {
+    return `${names[0] ?? ''} ${verb}`;
+  }
+  if (names.length === 2) {
+    return `${names[0] ?? ''} and ${names[1] ?? ''} ${verb}`;
+  }
+  if (names.length === 3) {
+    return `${names[0] ?? ''}, ${names[1] ?? ''}, and ${names[2] ?? ''} ${verb}`;
+  }
+  const remaining = names.length - 3;
+  const others = remaining === 1 ? '1 other' : `${remaining} others`;
+  return `${names[0] ?? ''}, ${names[1] ?? ''}, ${names[2] ?? ''}, and ${others} ${verb}`;
 }
 
 /**
@@ -48,6 +80,7 @@ export interface ReactionChipProps {
 export function ReactionChip({
   messageId,
   reaction,
+  resolveDisplayName,
   className,
 }: ReactionChipProps): React.JSX.Element {
   const queryClient = useQueryClient();
@@ -120,39 +153,63 @@ export function ReactionChip({
     mutation.mutate({ add: willBecomeActive });
   }, [isActive, mutation]);
 
-  // Screen-reader / hover label. Count drives the people/person pluralization.
-  const tooltipLabel =
+  // Resolve the reactor display names when a resolver is supplied. Empty when
+  // none is provided (e.g. inside the thread panel) or when none resolve.
+  const reactorNames = React.useMemo<string[]>(() => {
+    if (resolveDisplayName === undefined) {
+      return [];
+    }
+    const names: string[] = [];
+    for (const userId of reaction.userIds) {
+      const name = resolveDisplayName(userId);
+      if (name !== undefined && name.length > 0) {
+        names.push(name);
+      }
+    }
+    return names;
+  }, [resolveDisplayName, reaction.userIds]);
+
+  // Hover / screen-reader label: name the reactors when resolvable, otherwise
+  // fall back to the count-based pluralization.
+  const countLabel =
     optimisticCount === 1
       ? `${reaction.emoji} reaction (1 person)`
       : `${reaction.emoji} reaction (${optimisticCount} people)`;
+  const tooltipLabel =
+    reactorNames.length > 0 ? formatReactors(reactorNames, reaction.emoji) : countLabel;
 
   return (
-    // Composed from the shadcn `Button` primitive (variant="ghost") with pill
-    // classes so the chip inherits the design-system focus-visible ring,
-    // transition, and disabled treatment instead of a raw <button>.
-    <Button
-      type="button"
-      variant="ghost"
-      size="sm"
-      onClick={handleClick}
-      disabled={mutation.isPending}
-      aria-pressed={isActive}
-      aria-label={tooltipLabel}
-      title={tooltipLabel}
-      data-slot="reaction-chip"
-      data-active={isActive}
-      className={cn(
-        'h-6 gap-1 rounded-full border px-2 py-0.5 text-xs',
-        isActive
-          ? 'border-primary bg-primary/10 text-primary hover:bg-primary/15'
-          : 'border-transparent bg-muted text-foreground hover:bg-muted/80',
-        className,
-      )}
-    >
-      {/* The emoji is decorative for assistive tech; the accessible name comes
-          from `aria-label`, which also carries the reactor count. */}
-      <span aria-hidden="true">{reaction.emoji}</span>
-      <span className="font-medium tabular-nums">{optimisticCount}</span>
-    </Button>
+    // shadcn `Tooltip` (self-providing) hosts the reactor-name hint (AAP §0.5.2
+    // maps hover hints to Tooltip). The chip itself is composed from the shadcn
+    // `Button` primitive (variant="ghost") with pill classes so it inherits the
+    // design-system focus-visible ring, transition, and disabled treatment.
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <Button
+          type="button"
+          variant="ghost"
+          size="sm"
+          onClick={handleClick}
+          disabled={mutation.isPending}
+          aria-pressed={isActive}
+          aria-label={tooltipLabel}
+          data-slot="reaction-chip"
+          data-active={isActive}
+          className={cn(
+            'h-6 gap-1 rounded-full border px-2 py-0.5 text-xs',
+            isActive
+              ? 'border-primary bg-primary/10 text-primary hover:bg-primary/15'
+              : 'border-transparent bg-muted text-foreground hover:bg-muted/80',
+            className,
+          )}
+        >
+          {/* The emoji is decorative for assistive tech; the accessible name
+              comes from `aria-label`, which names the reactors (or the count). */}
+          <span aria-hidden="true">{reaction.emoji}</span>
+          <span className="font-medium tabular-nums">{optimisticCount}</span>
+        </Button>
+      </TooltipTrigger>
+      <TooltipContent>{tooltipLabel}</TooltipContent>
+    </Tooltip>
   );
 }

@@ -35,6 +35,13 @@ export interface MessageItemProps {
    * E2E selectors (no extra indentation in the PoC).
    */
   isThreadReply?: boolean;
+  /**
+   * Optional resolver mapping a user id to a display name. Forwarded to each
+   * {@link ReactionChip} so its tooltip can name the reactors (AAP §0.5.2)
+   * rather than showing a bare count. When absent, chips fall back to a
+   * count-based label.
+   */
+  resolveDisplayName?: (userId: string) => string | undefined;
   /** Forwarded className applied to the outer container. */
   className?: string;
 }
@@ -94,6 +101,7 @@ export function MessageItem({
   message,
   hideThreadActions = false,
   isThreadReply = false,
+  resolveDisplayName,
   className,
 }: MessageItemProps): React.JSX.Element {
   const navigate = useNavigate();
@@ -197,6 +205,7 @@ export function MessageItem({
                 key={reaction.emoji}
                 messageId={message.id}
                 reaction={reaction}
+                resolveDisplayName={resolveDisplayName}
               />
             ))}
             <ReactionPicker messageId={message.id} variant="chip" />

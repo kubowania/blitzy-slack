@@ -46,6 +46,8 @@ export function DmList(): React.JSX.Element {
   const queryClient = useQueryClient();
 
   const [isDialogOpen, setIsDialogOpen] = React.useState(false);
+  // Ref to the "+" trigger so the dialog can restore focus to it on close.
+  const dmTriggerRef = React.useRef<HTMLButtonElement | null>(null);
 
   // Read side: the shared `useDms` hook owns the `['dms']` query + auth gating.
   const { dms, isLoading } = useDms();
@@ -93,6 +95,7 @@ export function DmList(): React.JSX.Element {
         <Tooltip>
           <TooltipTrigger asChild>
             <Button
+              ref={dmTriggerRef}
               type="button"
               variant="ghost"
               size="icon"
@@ -144,7 +147,11 @@ export function DmList(): React.JSX.Element {
           : null}
       </div>
 
-      <StartDmDialog open={isDialogOpen} onOpenChange={setIsDialogOpen} />
+      <StartDmDialog
+        open={isDialogOpen}
+        onOpenChange={setIsDialogOpen}
+        triggerRef={dmTriggerRef}
+      />
     </section>
   );
 }

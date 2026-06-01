@@ -95,8 +95,8 @@ export function DmListItem({
             ) : null}
           </div>
         </ItemMedia>
-        <ItemContent>
-          <ItemTitle>{displayName}</ItemTitle>
+        <ItemContent className="min-w-0 gap-0">
+          <ItemTitle className="block w-full truncate">{displayName}</ItemTitle>
         </ItemContent>
       </Link>
     </Item>

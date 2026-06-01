@@ -33,8 +33,8 @@ export function Sidebar({ className, ...props }: React.ComponentProps<'aside'>) 
       )}
       {...props}
     >
-      <ScrollArea className="flex-1">
-        <nav className="flex flex-col gap-2 px-2 py-4" aria-label="Workspace navigation">
+      <ScrollArea className="flex-1 [&>[data-slot=scroll-area-viewport]>div]:!block">
+        <nav className="flex w-full min-w-0 flex-col gap-2 px-2 py-4" aria-label="Workspace navigation">
           <ChannelList />
           <Separator className="my-2 bg-sidebar-border/60" />
           <DmList />
