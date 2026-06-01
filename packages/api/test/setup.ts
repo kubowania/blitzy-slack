@@ -230,14 +230,57 @@ export async function createTestDm(input: CreateTestDmInput): Promise<DirectMess
 export const prismaTest = prisma;
 
 /**
+ * Database names recognized as dedicated dev/test databases that
+ * {@link cleanDatabase} is permitted to wipe.
+ */
+const SAFE_TEST_DB_NAMES = new Set(['slack_dev', 'slack_test']);
+
+/**
+ * Validates that DATABASE_URL points at a dedicated dev/test database before any
+ * `deleteMany()` runs. The integration suites share the dev database (`slack_dev`)
+ * by design (the trade-off and CI mitigation are documented in
+ * /docs/decision-log.md); this guard mirrors {@link assertSafeUploadPath} so a
+ * misconfigured DATABASE_URL (e.g. a production database) fails loudly instead of
+ * silently truncating its tables. The allow-list admits the recognized dev/test
+ * names plus any database whose name contains "test".
+ *
+ * @throws when DATABASE_URL cannot be parsed or names an unrecognized database.
+ */
+function assertSafeTestDatabase(databaseUrl: string): void {
+  let dbName: string;
+  try {
+    dbName = new URL(databaseUrl).pathname.replace(/^\//, '');
+  } catch {
+    throw new Error(
+      'Refusing to clean an unparseable DATABASE_URL. Point it at a dedicated ' +
+        'dev/test database (e.g. slack_dev or slack_test) before running the suite.',
+    );
+  }
+
+  const isSafe = SAFE_TEST_DB_NAMES.has(dbName) || /test/i.test(dbName);
+  if (!isSafe) {
+    throw new Error(
+      `Refusing to wipe database "${dbName}": cleanDatabase() only runs against a ` +
+        'recognized dev/test database (slack_dev, slack_test, or any name containing ' +
+        '"test"). Point DATABASE_URL at a dedicated test database before running the suite.',
+    );
+  }
+}
+
+/**
  * Removes all test data in dependency-safe order, then clears the uploads
  * directory. Intended for a `beforeEach` hook so each test starts clean.
+ *
+ * The target database is validated by {@link assertSafeTestDatabase} BEFORE any
+ * deletion so a misconfigured DATABASE_URL fails loudly rather than truncating an
+ * unintended (e.g. production) database.
  *
  * Deletion order (children before parents):
  *   MessageReaction → Message → ChannelMember → Channel →
  *   DMParticipant → DirectMessage → File → User
  */
 export async function cleanDatabase(): Promise<void> {
+  assertSafeTestDatabase(env.DATABASE_URL);
   await prismaTest.messageReaction.deleteMany();
   await prismaTest.message.deleteMany();
   await prismaTest.channelMember.deleteMany();

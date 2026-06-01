@@ -99,7 +99,7 @@ test.describe('Direct Messages', () => {
         // are matched; `.first()` guards against an accidental duplicate match.
         const addDmButton = page
           .getByRole('button', {
-            name: /add coworkers|new direct message|new dm|\+ direct messages|message someone/i,
+            name: /add coworkers|new direct message|new dm|\+ direct messages|message someone|start a direct message/i,
           })
           .first();
         await addDmButton.click();
@@ -109,8 +109,17 @@ test.describe('Direct Messages', () => {
         const picker = page.getByRole('dialog').or(page.getByRole('combobox')).first();
         await expect(picker).toBeVisible({ timeout: 5_000 });
 
-        // Search for the second user by their unique display name.
-        const searchInput = picker.getByRole('textbox').or(picker.getByRole('searchbox')).first();
+        // Search for the second user by their unique display name. The picker's
+        // search field is a shadcn CommandInput (cmdk), which exposes role
+        // "combobox" rather than "textbox"/"searchbox", so accept any of those
+        // primitives (or the placeholder) to stay resilient to the underlying
+        // control.
+        const searchInput = picker
+          .getByRole('combobox')
+          .or(picker.getByRole('textbox'))
+          .or(picker.getByRole('searchbox'))
+          .or(picker.getByPlaceholder(/search/i))
+          .first();
         await searchInput.fill(user2.displayName);
 
         // The match renders as a selectable option or button; pick whichever the

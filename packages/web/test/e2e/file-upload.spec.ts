@@ -10,9 +10,10 @@
  *                               rejected with a destructive Sonner toast and never
  *                               reaches the timeline (enforced client- AND
  *                               server-side per AAP §0.8.4).
- *   3. Download               — the attachment exposes a working download path
- *                               (best-effort: an explicit download control when
- *                               present, otherwise a resolvable file URL).
+ *   3. Download               — a non-image attachment renders a FileCard whose
+ *                               "Download <name>" control streams the bytes via
+ *                               the authenticated apiClient and emits a browser
+ *                               download event carrying the original filename.
  *   4. Preview Rendering      — image attachments render inline as an <img>
  *                               preview (AAP §0.5.4 FilePreview); non-image
  *                               attachments render as a file card showing the
@@ -246,43 +247,34 @@ test.describe('File Upload', () => {
         await expect(page.getByRole('textbox')).toBeVisible({ timeout: 10_000 });
       });
 
-      await test.step('Upload a PNG and wait for its attachment to render', async () => {
+      await test.step('Upload a non-image file and wait for its download control', async () => {
         const fileInput = page.locator('input[type="file"]');
+        // A NON-image attachment renders as a FileCard that exposes an explicit
+        // "Download <name>" control wired to the authenticated downloadFile()
+        // helper. (Images render an ImageFilePreview lightbox with no download
+        // button, so an image would not exercise the download path under test.)
         await fileInput.setInputFiles({
-          name: 'download-me.png',
-          mimeType: 'image/png',
-          buffer: tinyPng(),
+          name: 'download-me.bin',
+          mimeType: 'application/octet-stream',
+          buffer: Buffer.from('blitzy slack download payload'),
         });
-        // The attachment must render before a download can be triggered.
-        await expect(page.locator('img').first()).toBeVisible({ timeout: 5_000 });
+        // The download control must render before a download can be triggered.
+        await expect(page.getByRole('button', { name: /download/i }).first()).toBeVisible({
+          timeout: 5_000,
+        });
       });
 
-      await test.step('Trigger a download or verify a resolvable file URL', async () => {
-        // Prefer an explicit download control; fall back to verifying the file URL
-        // when the UI is preview-only (no dedicated download button).
-        const downloadButton = page
-          .getByRole('button', { name: /download/i })
-          .or(page.getByRole('link', { name: /download|download-me|test-image/i }))
-          .first();
-
-        const hasDownloadButton = await downloadButton
-          .waitFor({ state: 'visible', timeout: 2_000 })
-          .then(() => true)
-          .catch(() => false);
-
-        if (hasDownloadButton) {
-          const [download] = await Promise.all([
-            page.waitForEvent('download', { timeout: 10_000 }),
-            downloadButton.click(),
-          ]);
-          // The browser-suggested filename should reflect the uploaded file.
-          expect(download.suggestedFilename()).toMatch(/download-me|test-image/i);
-        } else {
-          // Preview-only fallback: the attachment URL must at least be resolvable.
-          const imgSrc = await page.locator('img').first().getAttribute('src');
-          expect(imgSrc).toBeTruthy();
-          expect(imgSrc ?? '').toMatch(/files|uploads|\.png/);
-        }
+      await test.step('Trigger the authenticated download and verify the saved filename', async () => {
+        // The FileCard download button streams the bytes through the authenticated
+        // apiClient (Bearer token) and drives a synthetic <a download> click, which
+        // emits a browser download event carrying the original filename.
+        const downloadButton = page.getByRole('button', { name: /download/i }).first();
+        const [download] = await Promise.all([
+          page.waitForEvent('download', { timeout: 10_000 }),
+          downloadButton.click(),
+        ]);
+        // The browser-suggested filename should reflect the uploaded file.
+        expect(download.suggestedFilename()).toMatch(/download-me/i);
       });
     });
   });

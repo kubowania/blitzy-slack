@@ -34,7 +34,7 @@ import request from 'supertest';
 import type { Application } from 'express';
 
 import type { MessageWithAuthor, SearchResponse } from '@app/shared/types/message';
-import { MAX_SEARCH_QUERY_LENGTH } from '@app/shared/constants/limits';
+import { MAX_SEARCH_QUERY_LENGTH, PAGE_SIZE, MAX_PAGE_SIZE } from '@app/shared/constants/limits';
 
 import {
   createTestApp,
@@ -45,6 +45,8 @@ import {
   createTestDm,
   prismaTest,
 } from './setup.js';
+import { searchMessages } from '../src/services/search.service.js';
+import { ValidationError } from '../src/middleware/errors.js';
 
 describe('GET /api/search?q=', () => {
   let app: Application;
@@ -605,6 +607,144 @@ describe('GET /api/search?q=', () => {
         .get(`/api/search?q=${encodeURIComponent(tricky)}`)
         .set('Authorization', `Bearer ${token}`);
       expect([200, 400]).toContain(response.status);
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // Service-layer branches (Issue 5 — search.service coverage)
+  //
+  // The HTTP route always forwards `limit: PAGE_SIZE` and its Zod validator
+  // rejects empty/oversized queries before the service runs, so the service's
+  // own `resolveLimit` normalization and its defensive query-length checks are
+  // only reachable by invoking `searchMessages` directly.
+  // ---------------------------------------------------------------------------
+  describe('service-layer limit normalization and validation', () => {
+    it('defaults the limit to PAGE_SIZE when none is supplied', async () => {
+      const { token, user } = await registerUser();
+      const channel = await createTestChannel({ token, isPrivate: false });
+      await prismaTest.message.createMany({
+        data: [
+          {
+            content: 'limitdefault alpha',
+            authorId: user.id,
+            channelId: channel.id,
+            parentId: null,
+          },
+          {
+            content: 'limitdefault beta',
+            authorId: user.id,
+            channelId: channel.id,
+            parentId: null,
+          },
+        ],
+      });
+
+      const results = await searchMessages({ userId: user.id, query: 'limitdefault' });
+      expect(results).toHaveLength(2);
+      expect(results.length).toBeLessThanOrEqual(PAGE_SIZE);
+    });
+
+    it('falls back to PAGE_SIZE when the limit is below 1', async () => {
+      const { token, user } = await registerUser();
+      const channel = await createTestChannel({ token, isPrivate: false });
+      await prismaTest.message.createMany({
+        data: [
+          { content: 'limitzero one', authorId: user.id, channelId: channel.id, parentId: null },
+          { content: 'limitzero two', authorId: user.id, channelId: channel.id, parentId: null },
+        ],
+      });
+
+      const results = await searchMessages({ userId: user.id, query: 'limitzero', limit: 0 });
+      expect(results).toHaveLength(2);
+    });
+
+    it('clamps a limit above MAX_PAGE_SIZE', async () => {
+      const { token, user } = await registerUser();
+      const channel = await createTestChannel({ token, isPrivate: false });
+      await prismaTest.message.createMany({
+        data: [
+          { content: 'limitclamp a', authorId: user.id, channelId: channel.id, parentId: null },
+          { content: 'limitclamp b', authorId: user.id, channelId: channel.id, parentId: null },
+        ],
+      });
+
+      const results = await searchMessages({
+        userId: user.id,
+        query: 'limitclamp',
+        limit: MAX_PAGE_SIZE + 50,
+      });
+      // Only two rows match, so clamping to MAX_PAGE_SIZE drops none here; the
+      // assertion confirms the >MAX_PAGE_SIZE branch executes without error.
+      expect(results).toHaveLength(2);
+      expect(results.length).toBeLessThanOrEqual(MAX_PAGE_SIZE);
+    });
+
+    it('floors a fractional limit (Math.floor)', async () => {
+      const { token, user } = await registerUser();
+      const channel = await createTestChannel({ token, isPrivate: false });
+      await prismaTest.message.createMany({
+        data: [
+          { content: 'limitfloor zero', authorId: user.id, channelId: channel.id, parentId: null },
+          { content: 'limitfloor one', authorId: user.id, channelId: channel.id, parentId: null },
+          { content: 'limitfloor two', authorId: user.id, channelId: channel.id, parentId: null },
+        ],
+      });
+
+      // 2.9 floors to 2, so exactly two of the three matches are returned.
+      const results = await searchMessages({ userId: user.id, query: 'limitfloor', limit: 2.9 });
+      expect(results).toHaveLength(2);
+    });
+
+    it('rejects an empty (whitespace-only) query with ValidationError', async () => {
+      const { user } = await registerUser();
+      await expect(searchMessages({ userId: user.id, query: '   ' })).rejects.toBeInstanceOf(
+        ValidationError,
+      );
+    });
+
+    it('rejects a query longer than MAX_SEARCH_QUERY_LENGTH with ValidationError', async () => {
+      const { user } = await registerUser();
+      const tooLong = 'x'.repeat(MAX_SEARCH_QUERY_LENGTH + 1);
+      await expect(searchMessages({ userId: user.id, query: tooLong })).rejects.toBeInstanceOf(
+        ValidationError,
+      );
+    });
+
+    it('sets hasCurrentUser when the caller is a later reactor of an emoji', async () => {
+      // The happy-path reaction test has the caller react FIRST (the
+      // first-insert branch). Here bob reacts FIRST and the caller (alice)
+      // SECOND, so the caller is processed as a later same-emoji reactor —
+      // exercising the "existing group" else-branch that flips hasCurrentUser.
+      const { token: aliceToken, user: alice } = await registerUser();
+      const { user: bob } = await registerUser();
+      const channel = await createTestChannel({ token: aliceToken, isPrivate: false });
+      const message = await prismaTest.message.create({
+        data: {
+          content: 'reactionsecond keyword',
+          authorId: alice.id,
+          channelId: channel.id,
+          parentId: null,
+        },
+      });
+
+      // Sequential creates fix the insertion order: bob first, caller second.
+      await prismaTest.messageReaction.create({
+        data: { messageId: message.id, userId: bob.id, emoji: '🔥' },
+      });
+      await prismaTest.messageReaction.create({
+        data: { messageId: message.id, userId: alice.id, emoji: '🔥' },
+      });
+
+      const results = await searchMessages({ userId: alice.id, query: 'reactionsecond' });
+      expect(results).toHaveLength(1);
+      const [hit] = results;
+      if (hit === undefined) {
+        throw new Error('expected exactly one search result');
+      }
+      const fire = hit.reactions.find((reaction) => reaction.emoji === '🔥');
+      expect(fire?.count).toBe(2);
+      expect(fire?.hasCurrentUser).toBe(true);
+      expect(fire?.userIds).toEqual(expect.arrayContaining([alice.id, bob.id]));
     });
   });
 });

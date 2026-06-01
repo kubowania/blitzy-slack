@@ -168,10 +168,12 @@ test.describe('Channel Messaging', () => {
 
       await test.step('Assert the new channel appears in the sidebar list', async () => {
         // Per Rule 1 the name is rendered with a `#` prefix, so a substring match
-        // on the generated name is used rather than an exact-string match.
-        await expect(page.getByRole('link', { name: new RegExp(channelName) }).first()).toBeVisible(
-          { timeout: 5_000 },
-        );
+        // on the generated name is used rather than an exact-string match. The
+        // sidebar channel row is a shadcn Item exposing role="button" (not a link),
+        // so it is matched by the button role.
+        await expect(
+          page.getByRole('button', { name: new RegExp(channelName) }).first(),
+        ).toBeVisible({ timeout: 5_000 });
       });
     });
   });
@@ -324,6 +326,19 @@ test.describe('Channel Messaging', () => {
 
           await page1.goto(`/app/channels/${channel.id}`);
           await page2.goto(`/app/channels/${channel.id}`);
+
+          // A visible composer on each page signals that the channel view (and its
+          // Socket.io room subscription) has mounted on BOTH clients. Without this
+          // gate, client 1 can broadcast the message before client 2 has joined the
+          // `channel:<id>` room, and Socket.io does not replay missed emits — so the
+          // peer would never receive that message (a cross-client race that mirrors
+          // the sibling real-time message test's readiness gate).
+          await expect(page1.getByRole('textbox', { name: COMPOSER_NAME }).first()).toBeVisible({
+            timeout: 10_000,
+          });
+          await expect(page2.getByRole('textbox', { name: COMPOSER_NAME }).first()).toBeVisible({
+            timeout: 10_000,
+          });
         });
 
         const content = await test.step('Post a message visible to both clients', async () => {
@@ -335,17 +350,30 @@ test.describe('Channel Messaging', () => {
         });
 
         await test.step('React on client 1 and assert the reaction propagates to client 2', async () => {
-          // Hovering the message text reveals the row toolbar (the :hover state
-          // applies to the ancestor row), exposing the add-reaction control.
+          // Hovering the message row reveals its floating action toolbar (the
+          // :hover state applies to the ancestor row), exposing the add-reaction
+          // control. The toolbar floats above the row (absolute, negative top
+          // offset), so the trigger is force-clicked: it is visible and
+          // pointer-interactive on hover, but Playwright's strict actionability
+          // check otherwise treats the overlapping row as intercepting the click.
           await page1.getByText(content).first().hover();
           await page1
-            .getByRole('button', { name: /add reaction|react|emoji/i })
+            // The message action is labelled exactly "Add reaction". Matching only
+            // that name avoids the composer's "Add emoji" control (which opens an
+            // insert-into-composer picker, not a reaction picker): a broader
+            // /react|emoji/ alternation matches both buttons, so `.first()` can grab
+            // the wrong one and the reaction EmojiPicker never opens.
+            .getByRole('button', { name: /add reaction/i })
             .first()
-            .click();
+            .click({ force: true });
 
-          // The emoji grid is a project-local component inside a shadcn Popover
-          // (AAP §0.5.4); the wave emoji is selectable by its glyph label.
-          await page1.getByRole('button', { name: '👋' }).first().click();
+          // The emoji grid (a project-local component inside a shadcn Popover,
+          // AAP §0.5.4) opens on the default category, so search by the emoji
+          // glyph — the picker filters by the character itself — to render the
+          // target regardless of which category tab is active, then select it by
+          // its "Select <emoji>" accessible name.
+          await page1.getByLabel('Search emoji').fill('👋');
+          await page1.getByRole('button', { name: 'Select 👋' }).first().click();
 
           // The reaction pill shows for the actor and propagates to the peer via
           // the `reaction:added` event (Rule 2) without any reload.
@@ -384,12 +412,22 @@ test.describe('Channel Messaging', () => {
       });
 
       const thread = await test.step('Open the thread Sheet on the parent message', async () => {
-        // Reveal the toolbar on the parent message and open its thread.
+        // Reveal the toolbar on the parent message and open its thread. The
+        // regex deliberately omits the bare "thread" token: this test creates a
+        // sidebar channel via uniqueChannelName('thread') ("thread-…"), whose
+        // role="button" row precedes the message toolbar in the DOM and would be
+        // matched first by `.first()`. The message action is labelled
+        // "Reply in thread" (MessageItem toolbar), so the tightened regex targets
+        // only the reply control.
         await page.getByText(parentContent).first().hover();
         await page
-          .getByRole('button', { name: /reply in thread|start a thread|thread/i })
+          .getByRole('button', { name: /reply in thread|start a thread/i })
           .first()
-          .click();
+          // The reply control sits in the message's floating hover toolbar
+          // (absolute, negative top offset); force the click so Playwright does not
+          // treat the overlapping message row as intercepting the visible,
+          // hover-enabled trigger (same rationale as the add-reaction control).
+          .click({ force: true });
 
         // The thread panel is a shadcn Sheet (role="dialog"); it is the most
         // recently opened dialog, so `.last()` selects it deterministically.
@@ -447,10 +485,15 @@ test.describe('Channel Messaging', () => {
       });
 
       await test.step('Scroll to the top and assert the older cursor page loads', async () => {
-        // Scroll the timeline region to the top to trip the IntersectionObserver
-        // sentinel that requests the previous (older) cursor page.
-        const messageList = page.getByRole('log').or(page.getByTestId('message-list')).first();
-        await messageList.evaluate((el) => {
+        // The scrollable element is the Radix ScrollArea viewport
+        // ([data-slot="scroll-area-viewport"]) inside the message list
+        // ([data-slot="message-list"]); the role="log" wrapper nested within it is
+        // not itself scrollable. Scrolling the viewport to the top trips the
+        // IntersectionObserver sentinel that requests the previous (older) cursor page.
+        const viewport = page
+          .locator('[data-slot="message-list"] [data-slot="scroll-area-viewport"]')
+          .first();
+        await viewport.evaluate((el) => {
           el.scrollTo({ top: 0 });
         });
 

@@ -7,6 +7,8 @@
  *   - registerUserViaApi() for cross-user test setup
  *   - loginViaUi(), loginAsAdmin(), registerUserViaUi() for UI flows
  *   - createChannelViaApi(), sendMessageViaUi() for action helpers
+ *   - cleanupTestData() + auto fixtures for per-test DB isolation (preserving
+ *     the Rule 4 seed admin) and worker-scoped Prisma disconnect
  *   - Extended `test` with apiUrl + appUrl fixtures
  *
  * See packages/web/test/e2e/README or AAP §0.8.1 for compliance requirements.
@@ -14,6 +16,15 @@
 
 import { test as base, expect as baseExpect } from '@playwright/test';
 import type { Page } from '@playwright/test';
+
+import { prisma, disconnectPrisma } from '@app/db';
+
+// The per-test cleanup helper below connects to Postgres directly through the
+// @app/db Prisma client (a lazy proxy that reads DATABASE_URL on first use).
+// Provide the local dev/test default when the variable is not exported into the
+// Playwright process, mirroring the API_URL / APP_URL fallbacks. Rationale and
+// the shared-database trade-off are recorded in docs/decision-log.md.
+process.env.DATABASE_URL ??= 'postgresql://slack:slack@localhost:5432/slack_dev?schema=public';
 
 // === Constants ===
 
@@ -208,6 +219,16 @@ export async function sendMessageViaUi(page: Page, content: string): Promise<voi
   const composer = page.getByRole('textbox', { name: /message|compose/i }).first();
   await composer.fill(content);
   await composer.press('Enter');
+  // Wait for the composer to clear before returning. A successful send resets
+  // the textarea to empty; until then the disabled, mid-submission composer
+  // still holds the submitted text. Firefox keeps that text visible noticeably
+  // longer than Chromium, so a follow-up `page.getByText(content)` on the
+  // sender's page would otherwise match BOTH the timeline message and the
+  // not-yet-cleared composer textarea and trip Playwright's strict mode.
+  // Gating on an empty composer makes the helper deterministic across browsers
+  // and additionally confirms the send round-trip completed before the caller
+  // proceeds to assert on the result.
+  await baseExpect(composer).toHaveValue('', { timeout: 10_000 });
 }
 
 /**
@@ -222,11 +243,49 @@ export function uniqueChannelName(prefix = 'test'): string {
   return `${prefix}-${suffix}`;
 }
 
+/**
+ * Remove all test-created data so each E2E test starts from a clean,
+ * deterministic state. The suite shares the single dev/test Postgres
+ * (`slack_dev`), so without this teardown channels, messages, and users
+ * accumulate across the run and couple tests to global state.
+ *
+ * Deletes in dependency-safe order (children before parents) and deliberately
+ * PRESERVES the Rule 4 seed admin (`admin@test.com`): that account is created
+ * once by Playwright's `globalSetup` (via POST /api/auth/register) and must
+ * survive so `loginAsAdmin` keeps working for every test. Relies on serial
+ * execution (`workers: 1` in playwright.config.ts) so cleanup never races a
+ * sibling test.
+ */
+export async function cleanupTestData(): Promise<void> {
+  await prisma.messageReaction.deleteMany();
+  await prisma.message.deleteMany();
+  await prisma.channelMember.deleteMany();
+  await prisma.channel.deleteMany();
+  await prisma.dMParticipant.deleteMany();
+  await prisma.directMessage.deleteMany();
+  await prisma.file.deleteMany();
+  await prisma.user.deleteMany({ where: { email: { not: ADMIN_EMAIL } } });
+}
+
 // === Test fixture extension ===
 
 interface TestFixtures {
   apiUrl: string;
   appUrl: string;
+  /**
+   * Auto fixture: after each test runs, remove all test-created rows so the
+   * next test starts clean (preserves the seed admin). Declared `auto` so every
+   * spec inherits the isolation without opting in.
+   */
+  cleanupAfterEach: void;
+}
+
+interface WorkerFixtures {
+  /**
+   * Auto worker fixture: disconnect the Prisma client when the worker tears
+   * down so the suite exits cleanly with no lingering DB connections.
+   */
+  dbConnection: void;
 }
 
 /**
@@ -237,7 +296,7 @@ interface TestFixtures {
  * Spec files MUST import `test` and `expect` from THIS module rather than
  * directly from `@playwright/test` so they inherit the fixtures.
  */
-export const test = base.extend<TestFixtures>({
+export const test = base.extend<TestFixtures, WorkerFixtures>({
   // eslint-disable-next-line no-empty-pattern
   apiUrl: async ({}, use) => {
     await use(API_URL);
@@ -246,6 +305,27 @@ export const test = base.extend<TestFixtures>({
   appUrl: async ({}, use) => {
     await use(APP_URL);
   },
+  // Per-test auto fixture: run the test, then remove all test-created rows so the
+  // next test starts from a clean database (the suite shares slack_dev). Serial
+  // execution (workers: 1) guarantees this never races a sibling test.
+  cleanupAfterEach: [
+    // eslint-disable-next-line no-empty-pattern
+    async ({}, use) => {
+      await use();
+      await cleanupTestData();
+    },
+    { auto: true },
+  ],
+  // Worker-scoped auto fixture: close the Prisma connection when the worker
+  // finishes so the run exits cleanly without open handles.
+  dbConnection: [
+    // eslint-disable-next-line no-empty-pattern
+    async ({}, use) => {
+      await use();
+      await disconnectPrisma();
+    },
+    { scope: 'worker', auto: true },
+  ],
 });
 
 /**

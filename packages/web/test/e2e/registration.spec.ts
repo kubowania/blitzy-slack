@@ -66,6 +66,20 @@ async function clearClientSession(page: Page): Promise<void> {
     window.localStorage.clear();
     window.sessionStorage.clear();
   });
+  // The /app document is still live after the clear above, and the Zustand auth
+  // store's `persist` middleware can write the in-memory JWT back into localStorage
+  // before the next navigation begins. Register an init script that re-clears both
+  // web-storage areas at document-start of every subsequent navigation, so the auth
+  // store always rehydrates as UNAUTHENTICATED on the fresh sign-in / re-register.
+  // Without this, a re-persisted token makes the "redirect signed-in visitors away
+  // from /login and /register" guard skip the form, leaving the email field absent
+  // and hanging the subsequent fill — a flake that surfaces only under full-suite
+  // timing (the post-login redirect to /app is client-side, so this init script
+  // does not run again and the freshly issued token persists normally).
+  await page.addInitScript(() => {
+    window.localStorage.clear();
+    window.sessionStorage.clear();
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -84,9 +98,13 @@ test.describe('Registration & Authentication', () => {
       await test.step('Land on the authenticated /app shell', async () => {
         await expect(page).toHaveURL(/\/app(\/.*)?$/);
         // The authenticated shell renders the workspace navigation (the sidebar /
-        // workspace rail of the three-column layout). Asserting the navigation role
-        // keeps the check resilient to layout refinement.
-        await expect(page.getByRole('navigation')).toBeVisible({ timeout: 5_000 });
+        // workspace rail of the three-column layout). Two <nav> landmarks exist
+        // (the WorkspaceNavRail "Workspace" rail and the Sidebar "Workspace
+        // navigation"), so the accessible name disambiguates the assertion and
+        // keeps it resilient to layout refinement.
+        await expect(page.getByRole('navigation', { name: 'Workspace navigation' })).toBeVisible({
+          timeout: 5_000,
+        });
       });
     });
 
@@ -167,7 +185,11 @@ test.describe('Registration & Authentication', () => {
 
       await test.step('Reach the authenticated /app shell', async () => {
         await expect(page).toHaveURL(/\/app(\/.*)?$/);
-        await expect(page.getByRole('navigation')).toBeVisible({ timeout: 5_000 });
+        // Disambiguate between the two <nav> landmarks (WorkspaceNavRail vs Sidebar)
+        // by accessible name so the assertion does not trip strict-mode.
+        await expect(page.getByRole('navigation', { name: 'Workspace navigation' })).toBeVisible({
+          timeout: 5_000,
+        });
       });
     });
 
