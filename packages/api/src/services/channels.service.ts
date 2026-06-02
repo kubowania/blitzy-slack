@@ -507,6 +507,47 @@ export async function leaveChannel(input: JoinLeaveInput): Promise<void> {
 }
 
 /**
+ * Assert the caller may VIEW a channel — i.e. subscribe a live socket to its
+ * broadcast room — WITHOUT requiring or creating durable membership.
+ *
+ * Access control mirrors {@link listChannelMessages} and {@link getChannelDetail}
+ * (the VIEW-ACL, NOT the stricter `assertChannelAccess` membership rule): a PUBLIC
+ * channel is viewable by any authenticated user, while a PRIVATE channel requires
+ * the caller to already be a member. The channel must exist either way. The check
+ * is read-only — it never writes a `ChannelMember` row.
+ *
+ * Used by the Socket.io `channel:join` handler to gate EPHEMERAL room
+ * subscription. Because viewing creates no membership, subscribing a socket to a
+ * public channel's live room does not silently join the user to it, keeping the
+ * durable `join` / `leave` operations distinct (see /docs/decision-log.md, F-003).
+ * The ACL deliberately matches the message-read path so the live stream a socket
+ * receives is exactly the set of channels whose history it may also read.
+ *
+ * @param channelId - the channel to authorize a live subscription to.
+ * @param userId - the requesting user's id (for the private-channel ACL).
+ * @throws {NotFoundError} when the channel does not exist.
+ * @throws {ForbiddenError} when the channel is private and the caller is not a member.
+ */
+export async function assertChannelViewable(channelId: string, userId: string): Promise<void> {
+  const channel = await prisma.channel.findUnique({
+    where: { id: channelId },
+    select: { id: true, isPrivate: true },
+  });
+  if (channel === null) {
+    throw new NotFoundError('Channel not found');
+  }
+  if (channel.isPrivate) {
+    const membership = await prisma.channelMember.findUnique({
+      where: { channelId_userId: { channelId, userId } },
+      select: { id: true },
+    });
+    if (membership === null) {
+      throw new ForbiddenError('You do not have access to this channel');
+    }
+  }
+}
+
+/**
  * Fetch a single channel hydrated with its members for the channel-detail view
  * (`GET /api/channels/:id`), used by the web channel header to render the
  * channel description and member-count chip.

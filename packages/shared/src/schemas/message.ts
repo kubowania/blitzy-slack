@@ -27,7 +27,9 @@ import {
  * `fileId` is set when the message has a single file attachment
  * (AAP §0.1.1 "File sharing with a 10 MB cap"); the file MUST have been
  * uploaded separately via `POST /api/files` first, and the resulting
- * `fileId` is passed here.
+ * `fileId` is passed here. When `fileId` is present the message may be
+ * file-only — `content` is allowed to be empty — matching the createMessage
+ * service, which rejects only empty-and-fileless content.
  *
  * `.strict()` rejects unknown keys.
  */
@@ -36,7 +38,6 @@ export const sendMessageSchema = z
     content: z
       .string()
       .trim()
-      .min(1, 'Message cannot be empty')
       .max(MAX_MESSAGE_LENGTH, `Message must be at most ${MAX_MESSAGE_LENGTH} characters`),
     channelId: z.string().cuid().optional(),
     dmId: z.string().cuid().optional(),
@@ -53,6 +54,18 @@ export const sendMessageSchema = z
         : 'Either channelId or dmId is required';
       ctx.addIssue({ code: z.ZodIssueCode.custom, message, path: ['channelId'] });
       ctx.addIssue({ code: z.ZodIssueCode.custom, message, path: ['dmId'] });
+    }
+    // Content is optional ONLY when an attachment is present: a message must
+    // carry either non-empty (post-trim) text or a fileId. This mirrors the
+    // createMessage service rule ("empty-and-fileless content" is the sole
+    // rejection) so a file-only message validates identically at the HTTP
+    // boundary and at the form (AAP §0.8.4 single source of truth).
+    if (data.content.length === 0 && data.fileId === undefined) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'Message must have content or a file attachment',
+        path: ['content'],
+      });
     }
   });
 
@@ -80,12 +93,25 @@ export const scopedMessageBodySchema = z
     content: z
       .string()
       .trim()
-      .min(1, 'Message cannot be empty')
       .max(MAX_MESSAGE_LENGTH, `Message must be at most ${MAX_MESSAGE_LENGTH} characters`),
     parentId: z.string().cuid().optional(),
     fileId: z.string().cuid().optional(),
   })
-  .strict();
+  .strict()
+  .superRefine((data, ctx) => {
+    // Content is optional ONLY when an attachment is present (mirrors
+    // sendMessageSchema and the createMessage service rule): a file-only message
+    // carries empty (post-trim) content plus a fileId, so it must validate here
+    // rather than being rejected at the HTTP boundary before reaching the
+    // service that already supports it (AAP §0.8.4 single source of truth).
+    if (data.content.length === 0 && data.fileId === undefined) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'Message must have content or a file attachment',
+        path: ['content'],
+      });
+    }
+  });
 
 /**
  * Inferred TypeScript type for the validated path-scoped message body.
@@ -152,6 +178,27 @@ function isStandardEmoji(value: string): boolean {
 }
 
 /**
+ * Single-source validator for one reaction `emoji` value.
+ *
+ * A standard Unicode emoji: non-empty, at most MAX_EMOJI_LENGTH code units
+ * (which bounds ZWJ-sequence length), with every code point belonging to the
+ * emoji set (pictographs, skin-tone modifiers, variation selector-16, the
+ * keycap combiner, the zero-width joiner, regional indicators, and tag
+ * characters) and at least one pictographic / flag / keycap element present.
+ *
+ * Exported so that BOTH the Socket.io reaction handler (via {@link reactionSchema})
+ * and the HTTP reaction routes (`POST /api/messages/:id/reactions` body and the
+ * `DELETE /api/messages/:id/reactions/:emoji` path param) reuse the exact same
+ * emoji validator — a single source of truth for emoji validation across every
+ * endpoint that accepts a reaction (AAP §0.8.4; standard-emoji-only §0.7.2).
+ */
+export const emojiSchema = z
+  .string()
+  .min(1)
+  .max(MAX_EMOJI_LENGTH)
+  .refine(isStandardEmoji, { message: 'emoji must be a standard Unicode emoji' });
+
+/**
  * Validates the payload for adding (`POST /api/messages/:id/reactions`) or
  * removing (`DELETE /api/messages/:id/reactions/:emoji`) a reaction on a
  * message.
@@ -160,22 +207,19 @@ function isStandardEmoji(value: string): boolean {
  * the message (`messageId`) and the emoji (`emoji`) — and the HTTP method
  * discriminates add vs remove.
  *
- * `emoji` must be a standard Unicode emoji: every code point belongs to the
- * emoji set (pictographs, skin-tone modifiers, variation selector-16, the
- * keycap combiner, the zero-width joiner, regional indicators, and tag
- * characters), and at least one pictographic / flag / keycap element is
- * present. The MAX_EMOJI_LENGTH cap bounds ZWJ-sequence length.
+ * `emoji` is validated by the shared {@link emojiSchema}: it must be a standard
+ * Unicode emoji (every code point belongs to the emoji set — pictographs,
+ * skin-tone modifiers, variation selector-16, the keycap combiner, the
+ * zero-width joiner, regional indicators, and tag characters — and at least one
+ * pictographic / flag / keycap element is present). The MAX_EMOJI_LENGTH cap
+ * bounds ZWJ-sequence length.
  *
  * `.strict()` rejects unknown keys.
  */
 export const reactionSchema = z
   .object({
     messageId: z.string().cuid(),
-    emoji: z
-      .string()
-      .min(1)
-      .max(MAX_EMOJI_LENGTH)
-      .refine(isStandardEmoji, { message: 'emoji must be a standard Unicode emoji' }),
+    emoji: emojiSchema,
   })
   .strict();
 

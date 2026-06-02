@@ -32,8 +32,10 @@
  * AppServer alias so every emit is checked against ServerToClientEvents.
  *
  * Validation (AAP §0.8.2 Gate 12) is enforced by the `validate` middleware
- * against the shared `sendMessageSchema` and the inline param/body schemas
- * below. Observability (Gate 10) is the request-scoped Pino child logger
+ * against the shared `sendMessageSchema` for sends and, for reactions, the
+ * shared `emojiSchema` (reused by the inline body/param schemas below) so the
+ * HTTP add/remove paths enforce the same standard-Unicode-emoji rule as the
+ * Socket.io reaction handler. Observability (Gate 10) is the request-scoped Pino child logger
  * (`req.log`). Rationale and trade-offs for the choices here live in
  * /docs/decision-log.md per the Explainability rule (AAP §0.8.3), not in these
  * comments.
@@ -49,7 +51,7 @@ import type { Server } from 'socket.io';
 import { z } from 'zod';
 
 import { REACTION_ADDED, REACTION_REMOVED } from '@app/shared/constants/events';
-import { sendMessageSchema } from '@app/shared/schemas/message';
+import { emojiSchema, sendMessageSchema } from '@app/shared/schemas/message';
 import type { SendMessageInput } from '@app/shared/schemas/message';
 import type { MessageWithAuthor, ReactionSummary, Thread } from '@app/shared/types/message';
 import type {
@@ -81,14 +83,24 @@ type AppServer = Server<ClientToServerEvents, ServerToClientEvents, InterServerE
 /** Validates the `:id` path parameter as a Prisma cuid; rejects extra params. */
 const messageIdParamsSchema = z.object({ id: z.string().cuid() }).strict();
 
-/** Validates the POST reaction `{ emoji }` request BODY. */
-const emojiBodySchema = z.object({ emoji: z.string().min(1).max(64) }).strict();
+/**
+ * Validates the POST reaction `{ emoji }` request BODY. The `emoji` field reuses
+ * the shared {@link emojiSchema}, so the HTTP add path enforces the SAME
+ * standard-Unicode-emoji rule as the Socket.io reaction handler — a single
+ * source of truth for emoji validation (AAP §0.8.4; standard-emoji-only §0.7.2).
+ */
+const emojiBodySchema = z.object({ emoji: emojiSchema }).strict();
 
-/** Validates the path params for DELETE /:id/reactions/:emoji (cuid id + emoji). */
+/**
+ * Validates the path params for DELETE /:id/reactions/:emoji (cuid id + emoji).
+ * The `:emoji` segment travels URL-encoded and is decoded by Express before
+ * validation; the shared {@link emojiSchema} then rejects non-emoji strings on
+ * the remove path identically to the add path and the socket handler.
+ */
 const reactionParamsSchema = z
   .object({
     id: z.string().cuid(),
-    emoji: z.string().min(1).max(64),
+    emoji: emojiSchema,
   })
   .strict();
 

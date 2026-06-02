@@ -202,7 +202,13 @@ export function MessageComposer({
 
   const submit = React.useCallback(() => {
     const values = form.getValues();
-    if (!form.formState.isValid || values.content.trim().length === 0) {
+    // Sendable when the payload carries something to send — non-whitespace text
+    // OR an attachment — and the form has no Zod validation errors. The server's
+    // sendMessageSchema permits empty content when a fileId is present, so a
+    // file-only message is a legitimate send (see /docs/decision-log.md, F-002).
+    const hasText = values.content.trim().length > 0;
+    const hasFile = values.fileId !== undefined;
+    if ((!hasText && !hasFile) || Object.keys(form.formState.errors).length > 0) {
       return;
     }
     sendMutation.mutate({
@@ -240,6 +246,11 @@ export function MessageComposer({
     (file: FileAttachment) => {
       setAttachedFile(file);
       form.setValue('fileId', file.id, { shouldValidate: true });
+      // setValue validates only the fileId field; the content-or-file rule is
+      // cross-field, so a full-form validation is required to refresh
+      // form.formState.errors and enable Send for a file-only message
+      // (see /docs/decision-log.md, F-002).
+      void form.trigger();
     },
     [form],
   );
@@ -247,11 +258,21 @@ export function MessageComposer({
   const handleFileRemove = React.useCallback(() => {
     setAttachedFile(null);
     form.setValue('fileId', undefined, { shouldValidate: true });
+    // Re-validate the whole form so form.formState.errors reflects the
+    // now-absent attachment against the content-or-file rule
+    // (see /docs/decision-log.md, F-002).
+    void form.trigger();
   }, [form]);
 
   const placeholder = computePlaceholder({ channelId, dmId, parentMessageId, scopeName });
+  // Send is enabled when there is something to send — non-whitespace text OR an
+  // attached file — and the form has no Zod validation errors. The server
+  // accepts a file-only message (empty content + fileId), so an attachment
+  // alone enables Send (see /docs/decision-log.md, F-002).
   const isSubmitDisabled =
-    sendMutation.isPending || content.trim().length === 0 || !form.formState.isValid;
+    sendMutation.isPending ||
+    (content.trim().length === 0 && attachedFile === null) ||
+    Object.keys(form.formState.errors).length > 0;
 
   return (
     <div data-slot="message-composer" className={cn('flex flex-col', className)}>

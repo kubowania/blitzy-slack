@@ -12,25 +12,32 @@
  *   - Listens: `channel:leave` (client → server) — acked `(ok: boolean)`
  *   - Emits:   `error`         (server → originating socket, on failure)
  *
- * Two distinct concerns are kept separate:
+ * Both events govern ONLY the socket's ephemeral room subscription; neither
+ * mutates durable `ChannelMember` rows. Durable membership is a separate concern
+ * owned exclusively by the HTTP routes (`POST /api/channels/:id/join` creates the
+ * row, `DELETE /api/channels/:id/members` revokes it). Keeping these concerns
+ * apart is what lets a user view a public channel without being silently and
+ * permanently joined to it (see /docs/decision-log.md, F-003):
  *
- *   - `channel:join` performs BOTH a persistent and an ephemeral action. It
- *     calls `joinChannel` to create the durable `ChannelMember` row (idempotent
- *     on re-join; rejected with `ForbiddenError` for a private channel the user
- *     was not invited to, `NotFoundError` for an unknown channel), then calls
+ *   - `channel:join` calls `assertChannelViewable` to verify the user may view
+ *     this channel's live stream. This is the VIEW-ACL — identical to the
+ *     message-read path: a PUBLIC channel is viewable by any authenticated user
+ *     (so a public channel can be previewed live without joining), while a
+ *     PRIVATE channel requires existing membership (rejected with `ForbiddenError`
+ *     for a non-member; `NotFoundError` for an unknown channel). It then calls
  *     `socket.join(channelRoom(id))` to subscribe this live connection to the
- *     broadcast room.
- *   - `channel:leave` performs ONLY the ephemeral action — `socket.leave(...)`.
- *     Durable membership is intentionally untouched here; it is revoked through
- *     the HTTP `DELETE /api/channels/:id/members` route. Closing a tab therefore
- *     drops the live subscription without removing the user from the channel.
+ *     broadcast room. The check is read-only — no `ChannelMember` row is created,
+ *     so viewing a public channel never silently joins the user to it.
+ *   - `channel:leave` performs the mirror ephemeral action — `socket.leave(...)`.
+ *     Closing a tab therefore drops the live subscription without altering the
+ *     user's membership in the channel.
  *
  * Broadcast rooms are addressed via the `channelRoom` helper from `../rooms.js`;
  * the Socket.io Redis adapter (AAP Rule 2) transparently fans every emit out to
  * subscribers connected to any API instance.
  *
  * Layering: this handler performs NO database, Redis, or JWT work directly. It
- * delegates persistence and access control to `joinChannel` and relies on the
+ * delegates access control to `assertChannelViewable` and relies on the
  * server-level socket-auth middleware to populate `socket.data.userId`.
  *
  * Structured logging (AAP §0.8.2 Gate 10) is emitted through the Pino `logger`
@@ -41,7 +48,7 @@
 import type { Server, Socket } from 'socket.io';
 import { ZodError } from 'zod';
 
-import { joinChannel } from '../../services/channels.service.js';
+import { assertChannelViewable } from '../../services/channels.service.js';
 import {
   ForbiddenError,
   NotFoundError,
@@ -129,15 +136,19 @@ function logUnhandledRejection(socket: AppSocket, event: string, err: unknown): 
 }
 
 /**
- * Validates, persists membership, subscribes, and acknowledges a single
+ * Validates, asserts access, subscribes, and acknowledges a single
  * `channel:join`.
  *
  * Flow:
  *   1. Validate the wire value with `joinChannelSchema` (Gate 12). The schema
  *      validates an object `{ channelId }`, so the bare wire string is wrapped
  *      before `.parse(...)`.
- *   2. Persist membership via `joinChannel`, which enforces the private-channel
- *      ACL and is idempotent on re-join.
+ *   2. Assert the user may view the channel's live stream via
+ *      `assertChannelViewable` (the VIEW-ACL: a public channel is viewable by any
+ *      authenticated user, a private channel requires existing membership;
+ *      rejecting with `ForbiddenError` for a private non-member and `NotFoundError`
+ *      for an unknown channel). This is a read-only ACL check — no `ChannelMember`
+ *      row is created, so viewing a public channel never silently joins it.
  *   3. Subscribe this live socket to the channel's broadcast room (ephemeral).
  *   4. Acknowledge the originating socket with `true`.
  *   5. Emit a structured success log line.
@@ -166,7 +177,7 @@ async function handleChannelJoin(
   try {
     const validated = joinChannelSchema.parse({ channelId });
 
-    await joinChannel({ channelId: validated.channelId, userId });
+    await assertChannelViewable(validated.channelId, userId);
 
     await socket.join(channelRoom(validated.channelId));
 

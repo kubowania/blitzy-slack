@@ -74,15 +74,25 @@ import type { PresenceUpdate } from './presence.js';
  */
 export interface ClientToServerEvents {
   /**
-   * Subscribe the socket to a channel room (`channel:<id>`).
-   * @param channelId - The channel to join.
-   * @param ack - Acknowledgement: `true` on success, `false` if not a member.
+   * Subscribe the LIVE socket to a channel's broadcast room (`channel:<id>`).
+   *
+   * EPHEMERAL room subscription only — it creates NO durable `ChannelMember`
+   * row, so viewing a channel never silently joins it (durable membership is
+   * owned by `POST /api/channels/:id/join`). The server gates the subscription
+   * with the VIEW-ACL: a public channel is viewable by any authenticated user,
+   * a private channel requires existing membership.
+   * @param channelId - The channel whose live room to subscribe to.
+   * @param ack - Acknowledgement: `true` once subscribed, `false` when the
+   *   channel is not viewable (private non-member, or unknown channel).
    */
   [CHANNEL_JOIN]: (channelId: string, ack: (ok: boolean) => void) => void;
 
   /**
-   * Unsubscribe the socket from a channel room.
-   * @param channelId - The channel to leave.
+   * Unsubscribe the LIVE socket from a channel's broadcast room. Ephemeral only —
+   * durable `ChannelMember` membership is untouched (revoked via
+   * `POST /api/channels/:id/leave`), so closing a tab drops the live subscription
+   * without removing the user from the channel.
+   * @param channelId - The channel whose live room to unsubscribe from.
    * @param ack - Acknowledgement: `true` on success.
    */
   [CHANNEL_LEAVE]: (channelId: string, ack: (ok: boolean) => void) => void;
@@ -90,9 +100,10 @@ export interface ClientToServerEvents {
   /**
    * Subscribe the socket to a direct-message room (`dm:<id>`).
    *
-   * Fire-and-forget: unlike `channel:join`, a DM has no durable membership to
-   * create — both participants are fixed at DM creation — so this purely
-   * subscribes the LIVE socket to the broadcast room. It covers DMs started
+   * Fire-and-forget: like `channel:join` this is a purely EPHEMERAL room
+   * subscription (a DM's two participants are fixed at creation, so there is no
+   * membership to create either way), subscribing the LIVE socket to the
+   * broadcast room. It covers DMs started
    * mid-session: the connection-time auto-join only subscribes DMs that existed
    * when the socket connected, so a newly-opened DM view emits this event to
    * subscribe its socket and receive `message:new` / `typing:*` broadcasts

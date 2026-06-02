@@ -10,7 +10,9 @@
  * Coverage:
  *   - JWT handshake middleware: valid connect; missing / invalid / expired token
  *     all reject with `connect_error` carrying `'Unauthorized'`.
- *   - Channel room subscription: `channel:join` ack(true)/ack(false) + room state.
+ *   - Channel room subscription: `channel:join` ack(true)/ack(false) + room state;
+ *     ephemeral (VIEW-ACL) — a public-channel join by a non-member subscribes the
+ *     live socket WITHOUT creating durable `ChannelMember` membership (F-003).
  *   - `channel:leave`: socket leaves the room (durable membership untouched).
  *   - `message:send`: channel broadcast, DM broadcast, thread (parent-room)
  *     broadcast, ack with the persisted `MessageWithAuthor`, ack error envelope.
@@ -549,6 +551,34 @@ describe('Socket.io integration (real-time WebSocket layer)', () => {
       const ok = await emitChannelJoin(client, 'clnonexistent0000000000000');
       expect(ok).toBe(false);
     });
+
+    it('F-003: a non-member joining a PUBLIC channel subscribes ephemerally WITHOUT creating durable membership', async () => {
+      // User A owns a public channel (auto-added as the owner ChannelMember).
+      const { token: ownerToken } = await registerUser();
+      const channel = await createTestChannel({ token: ownerToken, isPrivate: false });
+
+      // User B is NOT a member of the channel.
+      const { user: outsider } = await registerUser();
+      const client = await connectAndTrack(
+        signTestToken({ sub: outsider.id, email: outsider.email }),
+      );
+
+      // channel:join uses the VIEW-ACL: a public channel is viewable by any
+      // authenticated user, so B's socket subscribes to the live room (ack true).
+      const ok = await emitChannelJoin(client, channel.id);
+      expect(ok).toBe(true);
+
+      const sockets = await server.io.in(`channel:${channel.id}`).fetchSockets();
+      expect(sockets).toHaveLength(1);
+
+      // F-003 regression: merely viewing must NOT persist membership. No
+      // ChannelMember row may exist for B, so an explicit "leave" stays effective
+      // and is not silently undone the next time B views the channel.
+      const membership = await prismaTest.channelMember.findUnique({
+        where: { channelId_userId: { channelId: channel.id, userId: outsider.id } },
+      });
+      expect(membership).toBeNull();
+    });
   });
 
   describe('channel:leave handler', () => {
@@ -610,7 +640,9 @@ describe('Socket.io integration (real-time WebSocket layer)', () => {
       const receiverClient = await connectAndTrack(
         signTestToken({ sub: receiver.id, email: receiver.email }),
       );
-      // A public channel join also creates durable membership for the receiver.
+      // channel:join is an ephemeral room subscription gated by the VIEW-ACL: a
+      // public channel is viewable by any authenticated user, so the receiver
+      // subscribes (ack true) WITHOUT any durable ChannelMember row being created.
       expect(await emitChannelJoin(receiverClient, channel.id)).toBe(true);
 
       const receivedP = waitForEvent(receiverClient, SOCKET_EVENTS.MESSAGE_NEW);
@@ -1235,8 +1267,9 @@ describe('Socket.io integration (real-time WebSocket layer)', () => {
       }
       expect(Date.now() - connectStart).toBeLessThan(LOAD_BUDGET_MS);
 
-      // Every session joins the same public channel room (durable membership +
-      // socket-room join); all 50 acks must be true.
+      // Every session subscribes to the same public channel's broadcast room via
+      // the ephemeral, VIEW-ACL-gated channel:join (public → any authenticated
+      // user; no durable ChannelMember row is written); all 50 acks must be true.
       const joinAcks = await Promise.all(
         clients.map((client) => emitChannelJoin(client, channel.id, LOAD_BUDGET_MS)),
       );

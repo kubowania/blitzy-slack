@@ -523,6 +523,69 @@ describe('Message routes — POST /api/messages, GET /:id/replies, POST/DELETE /
         .send({ content: 'second', channelId: channel.id, fileId })
         .expect(409);
     });
+
+    it('F-002: accepts a file-only message (empty content + fileId) on both endpoints', async () => {
+      const { token } = await registerUser();
+      const channel = await createTestChannel({ token, isPrivate: false });
+
+      // Send a message carrying ONLY the attachment (no text). createMessage
+      // rejects only empty-AND-fileless content, and the request schemas now
+      // mirror that rule, so a file-only message validates at the HTTP boundary
+      // instead of being rejected with 422 (F-002: the schema previously required
+      // content.min(1), blocking the very file-only message the service supports).
+      const uploadDirect = await request(app)
+        .post('/api/files')
+        .set('Authorization', `Bearer ${token}`)
+        .attach('file', makeTinyPngBuffer(), { filename: 'only.png', contentType: 'image/png' })
+        .expect(201);
+      const directFileId = (uploadDirect.body as UploadedFileResponse).id;
+
+      const directResponse = await request(app)
+        .post('/api/messages')
+        .set('Authorization', `Bearer ${token}`)
+        .send({ content: '', channelId: channel.id, fileId: directFileId })
+        .expect(201);
+      const directBody = directResponse.body as MessageWithAuthor;
+      expect(directBody.fileId).toBe(directFileId);
+      expect(directBody.content).toBe('');
+
+      // The path-scoped composer endpoint (POST /api/channels/:id/messages, used
+      // by the web MessageComposer) also accepts a file-only body via the relaxed
+      // scopedMessageBodySchema.
+      const uploadScoped = await request(app)
+        .post('/api/files')
+        .set('Authorization', `Bearer ${token}`)
+        .attach('file', makeTinyPngBuffer(), { filename: 'scoped.png', contentType: 'image/png' })
+        .expect(201);
+      const scopedFileId = (uploadScoped.body as UploadedFileResponse).id;
+
+      const scopedResponse = await request(app)
+        .post(`/api/channels/${channel.id}/messages`)
+        .set('Authorization', `Bearer ${token}`)
+        .send({ content: '', fileId: scopedFileId })
+        .expect(201);
+      expect((scopedResponse.body as MessageWithAuthor).fileId).toBe(scopedFileId);
+    });
+
+    it('F-002: still rejects an empty, file-less message (422) on both endpoints', async () => {
+      const { token } = await registerUser();
+      const channel = await createTestChannel({ token, isPrivate: false });
+
+      // Empty content with NO attachment remains invalid: the content-or-file
+      // rule still requires one of the two, so relaxing the schema for file-only
+      // messages did not weaken the empty-message guard.
+      await request(app)
+        .post('/api/messages')
+        .set('Authorization', `Bearer ${token}`)
+        .send({ content: '', channelId: channel.id })
+        .expect(422);
+
+      await request(app)
+        .post(`/api/channels/${channel.id}/messages`)
+        .set('Authorization', `Bearer ${token}`)
+        .send({ content: '' })
+        .expect(422);
+    });
   });
 
   // -------------------------------------------------------------------------
@@ -904,6 +967,43 @@ describe('Message routes — POST /api/messages, GET /:id/replies, POST/DELETE /
         .expect(422);
     });
 
+    it('F-001: returns 422 for non-emoji strings that pass the length bound', async () => {
+      const { token } = await registerUser();
+      const channel = await createTestChannel({ token, isPrivate: false });
+      const messageResponse = await request(app)
+        .post('/api/messages')
+        .set('Authorization', `Bearer ${token}`)
+        .send({ content: 'x', channelId: channel.id })
+        .expect(201);
+      const messageId = (messageResponse.body as MessageWithAuthor).id;
+
+      // Plain text, a bare digit, and the XSS- / SQLi-shaped payloads from the
+      // F-001 reproduction are all within the length bound but are NOT standard
+      // Unicode emoji. The HTTP route must reject each via the shared emojiSchema
+      // `isStandardEmoji` refine (before the fix these returned 200 and persisted
+      // garbage into MessageReaction.emoji — the validation single-source-of-truth
+      // gap, AAP §0.8.4 / §0.7.2).
+      const nonEmoji = ['abc', 'hello world', '3', '<script>alert(1)</script>', "' OR 1=1 --"];
+      for (const emoji of nonEmoji) {
+        await request(app)
+          .post(`/api/messages/${messageId}/reactions`)
+          .set('Authorization', `Bearer ${token}`)
+          .send({ emoji })
+          .expect(422);
+      }
+
+      // No garbage reaction may have been persisted by any of the rejected calls.
+      const reactions = await prismaTest.messageReaction.findMany({ where: { messageId } });
+      expect(reactions).toHaveLength(0);
+
+      // Control: a genuine standard emoji on the same message still succeeds.
+      const ok = await request(app)
+        .post(`/api/messages/${messageId}/reactions`)
+        .set('Authorization', `Bearer ${token}`)
+        .send({ emoji: THUMBS_UP });
+      expect([200, 201]).toContain(ok.status);
+    });
+
     it('returns 422 for unknown fields per the .strict() schema', async () => {
       const { token } = await registerUser();
       const channel = await createTestChannel({ token, isPrivate: false });
@@ -977,6 +1077,28 @@ describe('Message routes — POST /api/messages, GET /:id/replies, POST/DELETE /
         .delete(`/api/messages/${messageId}/reactions/${encodedThumbsUp}`)
         .set('Authorization', `Bearer ${token}`);
       expect([200, 204, 404]).toContain(response.status);
+    });
+
+    it('F-001: returns 422 for a non-emoji :emoji path segment', async () => {
+      const { token } = await registerUser();
+      const channel = await createTestChannel({ token, isPrivate: false });
+      const messageResponse = await request(app)
+        .post('/api/messages')
+        .set('Authorization', `Bearer ${token}`)
+        .send({ content: 'react', channelId: channel.id })
+        .expect(201);
+      const messageId = (messageResponse.body as MessageWithAuthor).id;
+
+      // The DELETE `:emoji` path param is validated by the SAME shared emojiSchema
+      // as the POST body, so a non-emoji segment (URL-encoded) is rejected with 422
+      // rather than reaching the service — single-source-of-truth across both
+      // reaction paths and the socket handler (F-001; AAP §0.8.4 / §0.7.2).
+      for (const emoji of ['abc', 'hello world']) {
+        await request(app)
+          .delete(`/api/messages/${messageId}/reactions/${encodeURIComponent(emoji)}`)
+          .set('Authorization', `Bearer ${token}`)
+          .expect(422);
+      }
     });
 
     it('removes only the caller reaction and preserves other users reactions', async () => {
