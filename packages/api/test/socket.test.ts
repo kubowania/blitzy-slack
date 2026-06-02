@@ -69,6 +69,7 @@ import {
   redisClient,
 } from './setup.js';
 import { registerSocketHandlers } from '../src/sockets/index.js';
+import { stopPresenceSweep } from '../src/sockets/presence-sweep.js';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -178,6 +179,13 @@ function startTestSocketServer(): Promise<TestServer> {
 
 /** Closes the Socket.io server then the underlying HTTP server. */
 async function stopTestSocketServer(server: TestServer): Promise<void> {
+  // registerSocketHandlers() started the once-per-process passive-presence sweep
+  // timer; stop it here so its (unref-ed) interval does not outlive this suite and
+  // fire against the Redis client that closeTestResources() later disconnects —
+  // which would otherwise emit "presence sweep tick failed" error logs while the
+  // remaining suites run (mirrors the production graceful-shutdown teardown order).
+  stopPresenceSweep();
+
   await new Promise<void>((resolve) => {
     // `io.close()` also returns a Promise in Socket.io v4; the callback drives
     // resolution here, so the returned Promise is explicitly ignored.
@@ -725,6 +733,42 @@ describe('Socket.io integration (real-time WebSocket layer)', () => {
         channelId: channel.id,
         parentId: parent.id,
       });
+    });
+
+    it('emits message:updated carrying the re-hydrated parent (incremented replyCount) to the container room (WS-001)', async () => {
+      const { token, user } = await registerUser();
+      const channel = await createTestChannel({ token, isPrivate: false });
+      const parent = await prismaTest.message.create({
+        data: { content: 'parent message', authorId: user.id, channelId: channel.id },
+      });
+
+      const senderClient = await connectAndTrack(
+        signTestToken({ sub: user.id, email: user.email }),
+      );
+      expect(await emitChannelJoin(senderClient, channel.id)).toBe(true);
+
+      const { user: observer } = await registerUser();
+      const observerClient = await connectAndTrack(
+        signTestToken({ sub: observer.id, email: observer.email }),
+      );
+      expect(await emitChannelJoin(observerClient, channel.id)).toBe(true);
+
+      // A thread reply triggers a fire-and-forget parent re-hydration followed by
+      // a MESSAGE_UPDATED broadcast to the parent's container room (the channel),
+      // so channel subscribers reconcile the parent's authoritative replyCount.
+      // The payload is the PARENT (not the reply): id === parent.id, replyCount 1.
+      const updatedP = waitForEvent(observerClient, SOCKET_EVENTS.MESSAGE_UPDATED);
+      senderClient.emit(
+        SOCKET_EVENTS.MESSAGE_SEND,
+        { content: 'threaded reply', channelId: channel.id, parentId: parent.id },
+        noopAck,
+      );
+
+      const [updated] = await updatedP;
+      expect(updated.id).toBe(parent.id);
+      expect(updated.content).toBe('parent message');
+      expect(updated.parentId).toBeNull();
+      expect(updated.replyCount).toBe(1);
     });
   });
 

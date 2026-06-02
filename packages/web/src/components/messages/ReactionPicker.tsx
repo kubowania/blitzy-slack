@@ -4,7 +4,6 @@ import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
 
 import { Button } from '@/components/ui/button';
-import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { cn } from '@/lib/utils';
 import { apiClient, type ApiError } from '@/lib/api-client';
 import { EmojiPicker } from './EmojiPicker';
@@ -81,40 +80,34 @@ export function ReactionPicker({
     [mutation],
   );
 
-  // The icon variant composes a Radix Tooltip together with the EmojiPicker's
-  // Popover onto a single Button. EmojiPicker renders the supplied trigger inside
-  // `<PopoverTrigger asChild>`, so the Tooltip provider wraps the EmojiPicker and
-  // the Button is wrapped in `<TooltipTrigger asChild>`. The resulting
-  // `PopoverTrigger asChild` -> `TooltipTrigger asChild` -> Button chain forwards
-  // both triggers' props (open-toggle and hover hint) to the same button, while
-  // `TooltipContent` is a sibling of the EmojiPicker within the same Tooltip.
+  // The icon variant adds a hover hint via EmojiPicker's `tooltip` prop, which
+  // composes the Tooltip INTERNALLY with the Tooltip trigger wrapping the
+  // Popover trigger (Tooltip OUTER, Popover INNER). Passing a plain Button as
+  // the trigger lets EmojiPicker own the trigger nesting, so the open-toggle and
+  // the hover hint do not fight over the same button.
   if (variant === 'icon') {
     return (
-      <Tooltip>
-        <EmojiPicker
-          trigger={
-            <TooltipTrigger asChild>
-              <Button
-                type="button"
-                variant="ghost"
-                size="icon"
-                className={cn('size-7', className)}
-                disabled={mutation.isPending}
-                aria-label="Add reaction"
-                data-slot="reaction-picker-trigger"
-              >
-                <SmilePlus className="size-4" />
-              </Button>
-            </TooltipTrigger>
-          }
-          onSelect={handleSelect}
-          open={open}
-          onOpenChange={setOpen}
-          align="start"
-          side="top"
-        />
-        <TooltipContent>Add reaction</TooltipContent>
-      </Tooltip>
+      <EmojiPicker
+        trigger={
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon"
+            className={cn('size-7', className)}
+            disabled={mutation.isPending}
+            aria-label="Add reaction"
+            data-slot="reaction-picker-trigger"
+          >
+            <SmilePlus className="size-4" />
+          </Button>
+        }
+        tooltip="Add reaction"
+        onSelect={handleSelect}
+        open={open}
+        onOpenChange={setOpen}
+        align="start"
+        side="top"
+      />
     );
   }
 

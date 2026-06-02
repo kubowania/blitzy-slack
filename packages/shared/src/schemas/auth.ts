@@ -23,9 +23,19 @@ import {
  */
 export const registerSchema = z
   .object({
-    email: z.string().trim().email(),
-    password: z.string().min(MIN_PASSWORD_LENGTH),
-    displayName: z.string().trim().min(MIN_DISPLAY_NAME_LENGTH).max(MAX_DISPLAY_NAME_LENGTH),
+    email: z
+      .string({ required_error: 'Email is required' })
+      .trim()
+      .min(1, 'Email is required')
+      .email('Enter a valid email address'),
+    password: z
+      .string({ required_error: 'Password is required' })
+      .min(MIN_PASSWORD_LENGTH, `Password must be at least ${MIN_PASSWORD_LENGTH} characters`),
+    displayName: z
+      .string({ required_error: 'Display name is required' })
+      .trim()
+      .min(MIN_DISPLAY_NAME_LENGTH, 'Display name is required')
+      .max(MAX_DISPLAY_NAME_LENGTH, `Display name must be at most ${MAX_DISPLAY_NAME_LENGTH} characters`),
   })
   .strict();
 
@@ -49,8 +59,12 @@ export type RegisterInput = z.infer<typeof registerSchema>;
  */
 export const loginSchema = z
   .object({
-    email: z.string().trim().email(),
-    password: z.string().min(1),
+    email: z
+      .string({ required_error: 'Email is required' })
+      .trim()
+      .min(1, 'Email is required')
+      .email('Enter a valid email address'),
+    password: z.string({ required_error: 'Password is required' }).min(1, 'Password is required'),
   })
   .strict();
 

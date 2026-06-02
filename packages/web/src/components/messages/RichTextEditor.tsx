@@ -214,7 +214,7 @@ function FormattingToolbar({ disabled, onFormat }: FormattingToolbarProps): Reac
   return (
     <div
       data-slot="rich-text-editor-toolbar"
-      className="flex items-center gap-0.5 border-b border-border px-2 py-1"
+      className="flex flex-wrap items-center gap-0.5 border-b border-border px-2 py-1"
       role="toolbar"
       aria-label="Text formatting"
     >

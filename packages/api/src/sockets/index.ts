@@ -19,6 +19,9 @@
  *   - On disconnect: clear the Redis-backed presence state ONLY when the
  *     disconnecting socket was the user's last live socket (multi-tab safety),
  *     then fan an `offline` presence:update out to the user's peers.
+ *   - Start the once-per-process passive-presence sweep (`startPresenceSweep`)
+ *     so users who stop heart-beating drift `online → away → offline` and those
+ *     transitions reach peers without any client poll.
  *
  * Layering: this module touches neither Prisma, Redis, nor Express directly. Its
  * only service dependency is `clearPresence`, invoked from the Socket.io-only
@@ -41,6 +44,7 @@ import { registerReactionHandlers } from './handlers/reaction.handler.js';
 import { registerSubscriptionHandlers } from './handlers/subscription.handler.js';
 import { registerTypingHandlers } from './handlers/typing.handler.js';
 import { broadcastPresenceUpdate } from './presence-broadcast.js';
+import { startPresenceSweep } from './presence-sweep.js';
 import { channelRoom, dmRoom, userRoom } from './rooms.js';
 
 import type {
@@ -135,16 +139,24 @@ async function autoJoinAuthorizedRooms(socket: AppSocket): Promise<void> {
  *   1. `io.use(socketAuth)` — authenticate every connection at the server level
  *      before any connection handler fires; `socketAuth` populates
  *      `socket.data.userId` and `socket.data.email`.
- *   2. `io.on('connection', ...)` — for each authenticated socket: auto-join the
- *      owner's `user:<id>` room, log the connection, register the four
+ *   2. `startPresenceSweep(io)` — install the once-per-process passive-presence
+ *      sweep so online→away→offline drift reaches peers without a client poll.
+ *   3. `io.on('connection', ...)` — for each authenticated socket: auto-join the
+ *      owner's `user:<id>` room, log the connection, register the
  *      event-family handler factories, and install the disconnect handler.
- *   3. The disconnect handler clears presence only when the user has no
+ *   4. The disconnect handler clears presence only when the user has no
  *      remaining live sockets (multi-tab safety).
  *
  * @param io - The typed Socket.io server to wire handlers onto.
  */
 export function registerSocketHandlers(io: AppServer): void {
   io.use(socketAuth);
+
+  // Start the server-level passive-presence sweep exactly once. It observes
+  // users who stop heart-beating and drift online → away → offline (which
+  // produce no client traffic) and broadcasts those transitions to peers.
+  // startPresenceSweep is idempotent, so a second registration would be a no-op.
+  startPresenceSweep(io);
 
   io.on('connection', (socket: AppSocket) => {
     const connectedAt = Date.now();

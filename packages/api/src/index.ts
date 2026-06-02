@@ -35,6 +35,7 @@ import { env } from './config/env.js';
 import { logger } from './config/logger.js';
 import { disconnectRedisClients, pubClient, subClient } from './config/redis.js';
 import { registerSocketHandlers } from './sockets/index.js';
+import { stopPresenceSweep } from './sockets/presence-sweep.js';
 
 /**
  * Fully-typed Socket.io server bound to the shared real-time event contract
@@ -163,6 +164,12 @@ function registerShutdownHandlers(httpServer: HttpServer, io: AppIOServer): void
 
     const cleanup = async (): Promise<void> => {
       try {
+        // Stop the passive-presence sweep timer FIRST so no tick fires against a
+        // closing Redis client or a closing Socket.io server during teardown.
+        // Synchronous and idempotent (clearInterval of the unref-ed timer).
+        stopPresenceSweep();
+        logger.info('Presence sweep stopped');
+
         // Stop accepting NEW connections immediately. Synchronous and not
         // awaited: Node's close callback only fires once every existing
         // connection — including long-lived WebSockets — has ended, and those

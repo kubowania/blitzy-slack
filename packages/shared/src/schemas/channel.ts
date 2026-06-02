@@ -27,9 +27,24 @@ const CHANNEL_NAME_PATTERN = /^[a-z0-9_-]+$/;
  */
 export const createChannelSchema = z
   .object({
-    name: z.string().trim().min(1).max(MAX_CHANNEL_NAME_LENGTH).regex(CHANNEL_NAME_PATTERN),
-    description: z.string().trim().max(MAX_CHANNEL_DESCRIPTION_LENGTH).optional(),
-    isPrivate: z.boolean(),
+    name: z
+      .string({ required_error: 'Channel name is required' })
+      .trim()
+      .min(1, 'Channel name is required')
+      .max(MAX_CHANNEL_NAME_LENGTH, `Channel name must be at most ${MAX_CHANNEL_NAME_LENGTH} characters`)
+      .regex(CHANNEL_NAME_PATTERN, 'Use lowercase letters, numbers, hyphens, and underscores only'),
+    description: z
+      .string()
+      .trim()
+      .max(
+        MAX_CHANNEL_DESCRIPTION_LENGTH,
+        `Description must be at most ${MAX_CHANNEL_DESCRIPTION_LENGTH} characters`,
+      )
+      .optional(),
+    isPrivate: z.boolean({
+      required_error: 'Select whether the channel is private',
+      invalid_type_error: 'Channel privacy must be true or false',
+    }),
   })
   .strict();
 

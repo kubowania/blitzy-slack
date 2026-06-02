@@ -48,7 +48,7 @@ import { Router, type Request, type Response } from 'express';
 import type { Server } from 'socket.io';
 import { z } from 'zod';
 
-import { MESSAGE_NEW, REACTION_ADDED, REACTION_REMOVED } from '@app/shared/constants/events';
+import { REACTION_ADDED, REACTION_REMOVED } from '@app/shared/constants/events';
 import { sendMessageSchema } from '@app/shared/schemas/message';
 import type { SendMessageInput } from '@app/shared/schemas/message';
 import type { MessageWithAuthor, ReactionSummary, Thread } from '@app/shared/types/message';
@@ -64,10 +64,12 @@ import { validate } from '../middleware/validate.js';
 import {
   addReaction,
   createMessage,
+  getMessageById,
   listThreadReplies,
   removeReaction,
 } from '../services/messages.service.js';
 import { channelRoom, dmRoom, threadRoom } from '../sockets/rooms.js';
+import { broadcastCreatedMessage } from '../sockets/message-broadcast.js';
 
 /**
  * Fully-typed Socket.io server alias. Narrowing `req.app.get('io')` to this type
@@ -180,21 +182,10 @@ router.post(
       fileId: req.body.fileId,
     });
 
-    const io = getIo(req);
-
-    if (message.parentId !== null) {
-      // Thread reply: DUAL broadcast — thread panel + parent's container room.
-      io.to(threadRoom(message.parentId)).emit(MESSAGE_NEW, message);
-      if (message.channelId !== null) {
-        io.to(channelRoom(message.channelId)).emit(MESSAGE_NEW, message);
-      } else if (message.dmId !== null) {
-        io.to(dmRoom(message.dmId)).emit(MESSAGE_NEW, message);
-      }
-    } else if (message.channelId !== null) {
-      io.to(channelRoom(message.channelId)).emit(MESSAGE_NEW, message);
-    } else if (message.dmId !== null) {
-      io.to(dmRoom(message.dmId)).emit(MESSAGE_NEW, message);
-    }
+    // Single producer of message:new (dual for thread replies) plus the
+    // message:updated parent reconcile, shared with the path-scoped channel/DM
+    // routes and the socket message handler.
+    broadcastCreatedMessage(getIo(req), message);
 
     req.log.info(
       {
@@ -231,6 +222,22 @@ router.get(
     const { parent, messages } = await listThreadReplies({ parentId, userId });
 
     res.status(200).json({ parent, replies: messages });
+  },
+);
+
+router.get(
+  '/:id',
+  requireAuth,
+  validate({ params: messageIdParamsSchema }),
+  async (req: Request<{ id: string }>, res: Response<MessageWithAuthor>): Promise<void> => {
+    const userId = req.user!.id;
+    const messageId = req.params.id;
+
+    // The service enforces the same channel/DM ACL as the timeline read and
+    // returns the fully-hydrated message (author, reactions, file, reply count).
+    const message = await getMessageById({ messageId, userId });
+
+    res.status(200).json(message);
   },
 );
 

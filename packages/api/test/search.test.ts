@@ -404,31 +404,31 @@ describe('GET /api/search?q=', () => {
   // Gate 12 — request validation (searchQuerySchema)
   // ---------------------------------------------------------------------------
   describe('Gate 12 validation', () => {
-    it('returns 400 when q is missing', async () => {
+    it('returns 422 when q is missing', async () => {
       const { token } = await registerUser();
-      await request(app).get('/api/search').set('Authorization', `Bearer ${token}`).expect(400);
+      await request(app).get('/api/search').set('Authorization', `Bearer ${token}`).expect(422);
     });
 
-    it('returns 400 when q is empty', async () => {
+    it('returns 422 when q is empty', async () => {
       const { token } = await registerUser();
-      await request(app).get('/api/search?q=').set('Authorization', `Bearer ${token}`).expect(400);
+      await request(app).get('/api/search?q=').set('Authorization', `Bearer ${token}`).expect(422);
     });
 
-    it('returns 400 when q is whitespace-only (trims to empty)', async () => {
+    it('returns 422 when q is whitespace-only (trims to empty)', async () => {
       const { token } = await registerUser();
       await request(app)
         .get(`/api/search?q=${encodeURIComponent('   ')}`)
         .set('Authorization', `Bearer ${token}`)
-        .expect(400);
+        .expect(422);
     });
 
-    it('returns 400 when q exceeds MAX_SEARCH_QUERY_LENGTH', async () => {
+    it('returns 422 when q exceeds MAX_SEARCH_QUERY_LENGTH', async () => {
       const { token } = await registerUser();
       const tooLong = 'a'.repeat(MAX_SEARCH_QUERY_LENGTH + 1);
       await request(app)
         .get(`/api/search?q=${encodeURIComponent(tooLong)}`)
         .set('Authorization', `Bearer ${token}`)
-        .expect(400);
+        .expect(422);
     });
 
     it('accepts q exactly at MAX_SEARCH_QUERY_LENGTH', async () => {
@@ -450,9 +450,9 @@ describe('GET /api/search?q=', () => {
         .set('Authorization', `Bearer ${token}`);
 
       // `searchQuerySchema` is `.strict()`, so the validate middleware rejects the
-      // extra `channel` key with 400. We accept 200 as well to stay robust if the
+      // extra `channel` key with 422. We accept 200 as well to stay robust if the
       // query parser is later configured to drop unknown keys before validation.
-      expect([200, 400]).toContain(response.status);
+      expect([200, 422]).toContain(response.status);
     });
   });
 
@@ -582,31 +582,84 @@ describe('GET /api/search?q=', () => {
   // SQL injection defense (parameterized Prisma.sql)
   // ---------------------------------------------------------------------------
   describe('SQL injection defense', () => {
-    it('does not execute injected SQL through the query parameter', async () => {
+    it('rejects an injected SQL payload with 422 before any query runs (SEC-001)', async () => {
       const { token, user } = await registerUser();
       const channel = await createTestChannel({ token, isPrivate: false });
       await prismaTest.message.create({
         data: { content: 'safe content', authorId: user.id, channelId: channel.id, parentId: null },
       });
 
+      // The `searchQuerySchema` SQL-injection signature guard (SEC-001) rejects
+      // this payload (it contains both `;\s*drop` and a `--` comment) with a 422
+      // at the validation boundary, before the service query is reached.
       const response = await request(app)
         .get(`/api/search?q=${encodeURIComponent("'; DROP TABLE messages; --")}`)
         .set('Authorization', `Bearer ${token}`);
-      expect([200, 400]).toContain(response.status);
+      expect(response.status).toBe(422);
 
-      // The parameterized `Prisma.sql` query makes injection impossible — the
-      // Message table (and the seeded row) must still exist afterward.
+      // Defense-in-depth: even if validation were bypassed, the parameterized
+      // `Prisma.sql` query makes injection impossible — the Message table (and
+      // the seeded row) must still exist afterward.
       const remaining = await prismaTest.message.count();
       expect(remaining).toBeGreaterThan(0);
     });
 
+    it('rejects every canonical SQL-injection signature with 422 (SEC-001)', async () => {
+      const { token } = await registerUser();
+
+      // The signatures the schema guard must catch: tautologies, stacked
+      // statements, UNION SELECT, and SQL comment delimiters.
+      const maliciousQueries = [
+        "' OR 1=1 --",
+        'OR 1=1',
+        "OR '1'='1'",
+        '1; DROP TABLE users',
+        'UNION SELECT password FROM users',
+        '/* comment */',
+        "admin'--",
+      ];
+
+      for (const q of maliciousQueries) {
+        const response = await request(app)
+          .get(`/api/search?q=${encodeURIComponent(q)}`)
+          .set('Authorization', `Bearer ${token}`);
+        expect(response.status).toBe(422);
+      }
+    });
+
+    it('accepts legitimate queries containing incidental SQL keywords with 200 (SEC-001)', async () => {
+      const { token } = await registerUser();
+
+      // The guard must not over-block ordinary prose: bare keywords (`and`,
+      // `or`), apostrophes, and numbers are only rejected in an actual injection
+      // shape (e.g. `or <operand> = <operand>`), never on their own.
+      const legitimateQueries = [
+        'rock and roll = music',
+        'deployment status',
+        'meeting at 2pm',
+        'lets sync on the API contract',
+        'bug in search feature',
+        'q4 OKRs and goals',
+        'price is 100',
+      ];
+
+      for (const q of legitimateQueries) {
+        const response = await request(app)
+          .get(`/api/search?q=${encodeURIComponent(q)}`)
+          .set('Authorization', `Bearer ${token}`);
+        expect(response.status).toBe(200);
+      }
+    });
+
     it('handles special characters (quotes, backslashes) safely', async () => {
       const { token } = await registerUser();
+      // An apostrophe + backslash in ordinary text is NOT an injection signature,
+      // so it passes validation and the parameterized query handles it (200).
       const tricky = "hello'world\\test";
       const response = await request(app)
         .get(`/api/search?q=${encodeURIComponent(tricky)}`)
         .set('Authorization', `Bearer ${token}`);
-      expect([200, 400]).toContain(response.status);
+      expect(response.status).toBe(200);
     });
   });
 

@@ -56,6 +56,10 @@ export function ChannelListItem({ channel, className }: ChannelListItemProps): R
       size="sm"
       className={cn(
         'cursor-pointer rounded-md px-2 py-1 text-sidebar-foreground',
+        // Comfortable 44px touch target on phones (where this row lives in the
+        // off-canvas drawer); reverts to Slack's dense desktop height at `md`+
+        // (A11Y-001 vs Rule 1 density — see /docs/decision-log.md).
+        'min-h-11 md:min-h-0',
         'hover:bg-sidebar-hover hover:text-sidebar-hover-foreground',
         isActive && 'bg-sidebar-accent text-sidebar-accent-foreground',
         className,

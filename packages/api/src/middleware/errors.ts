@@ -11,7 +11,7 @@
  *   ForbiddenError    → 403
  *   NotFoundError     → 404
  *   ConflictError     → 409
- *   ValidationError   → 400
+ *   ValidationError   → 422
  *   AppError          → caller-supplied `statusCode`
  *
  * Design rationale and trade-offs are recorded in /docs/decision-log.md.
@@ -97,14 +97,15 @@ export class ConflictError extends ServiceError {
 }
 
 /**
- * 400 Bad Request — a request payload or service-layer invariant is invalid.
+ * 422 Unprocessable Entity — a request payload or service-layer invariant is
+ * syntactically well-formed but semantically invalid.
  *
  * Carries optional `details` (field path → messages) so the error-handler can
  * surface per-field validation feedback. The `validate` middleware wraps Zod
  * failures in this class with `details` populated from `error.flatten()`.
  */
 export class ValidationError extends ServiceError {
-  public readonly statusCode = 400;
+  public readonly statusCode = 422;
   public readonly details?: ValidationFieldErrors;
 
   public constructor(message = 'Validation failed', details?: ValidationFieldErrors) {

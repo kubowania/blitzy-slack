@@ -14,7 +14,7 @@ describe('domain error classes', () => {
     expect(new ForbiddenError().statusCode).toBe(403);
     expect(new NotFoundError().statusCode).toBe(404);
     expect(new ConflictError().statusCode).toBe(409);
-    expect(new ValidationError().statusCode).toBe(400);
+    expect(new ValidationError().statusCode).toBe(422);
   });
 
   it('lets AppError carry a caller-supplied status code', () => {
@@ -60,7 +60,7 @@ describe('domain error classes', () => {
     const details = { email: ['Invalid email'], password: ['Too short'] };
     const err = new ValidationError('Invalid request body', details);
     expect(err.details).toEqual(details);
-    expect(err.statusCode).toBe(400);
+    expect(err.statusCode).toBe(422);
   });
 
   it('leaves ValidationError.details undefined when omitted', () => {

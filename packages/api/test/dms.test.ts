@@ -1,10 +1,11 @@
 /**
  * @file packages/api/test/dms.test.ts
  *
- * Jest + supertest integration tests for the direct-message routes (3 endpoints):
+ * Jest + supertest integration tests for the direct-message routes (4 endpoints):
  *   - GET  /api/dms                              — list DMs the caller participates in
  *   - POST /api/dms                              — start or find a 1:1 DM (idempotent)
  *   - GET  /api/dms/:id/messages?cursor=&limit=  — paginated DM message history
+ *   - POST /api/dms/:id/messages                 — send a message scoped to the DM (DM-001)
  *
  * Compliance:
  *   Rule 3  — Zero-warning strict TypeScript. The test-file ESLint block relaxes
@@ -28,12 +29,15 @@
  *           (shared cursor/limit pagination contract).
  *
  * Behavioral contract verified against the IMPLEMENTED route/service
- * (`src/routes/dms.ts`, `src/services/dms.service.ts`), NOT the assigned-file
- * prompt's illustrative sketch. The verified differences — POST /api/dms always
- * responds 200; GET /:id/messages returns a `{ messages, nextCursor }` envelope
- * (there is no `hasMore` field); participants are hydrated as `PublicUser`
- * (read via `.id`); and the route guards `req.app.get('io')` so no Socket.io
- * stub is required — are recorded in /docs/decision-log.md per the
+ * (`src/routes/dms.ts`, `src/services/dms.service.ts`). POST /api/dms always
+ * responds 200; GET /:id/messages returns a `{ messages, nextCursor, hasMore }`
+ * envelope (the explicit `hasMore` boolean is required by covenant #182 /
+ * finding PAG-001); participants are hydrated as `PublicUser` (read via `.id`).
+ * The scoped write route POST /:id/messages reads `req.app.get('io')` UNGUARDED
+ * (it shares the `broadcastCreatedMessage` fan-out helper with the channel and
+ * generic message routes), and POST /api/dms's room-join side effect also reads
+ * `io` once a stub is registered, so a no-op Socket.io stub is installed in
+ * beforeAll. Design rationale lives in /docs/decision-log.md per the
  * Explainability rule (AAP §0.8.3), not in these comments.
  */
 
@@ -70,6 +74,12 @@ import {
 interface DmMessagesPage {
   messages: MessageWithAuthor[];
   nextCursor: string | null;
+  /**
+   * Explicit "another older page exists" flag (covenant #182 / PAG-001): `true`
+   * when a full page was returned AND a peek found at least one older row, so the
+   * client never has to infer "more" from a non-null cursor alone.
+   */
+  hasMore: boolean;
 }
 
 /**
@@ -93,15 +103,58 @@ const MISSING_CUID = 'clxnonexistent00000000000';
 /** A well-formed cuid used only in unauthenticated path tests (never resolved). */
 const PLACEHOLDER_CUID = 'clx0000000000000000000000';
 
-describe('Direct message routes — GET /api/dms, POST /api/dms, GET /api/dms/:id/messages', () => {
+// ---------------------------------------------------------------------------
+// Socket.io stub
+//
+// The scoped write route POST /api/dms/:id/messages reads `req.app.get('io')`
+// UNGUARDED (it shares the broadcastCreatedMessage fan-out helper), and once an
+// io is registered the POST /api/dms create route also exercises its room-join
+// side effect `io.in(userRoom(id)).socketsJoin(dmRoom(id))`. A no-op stub
+// satisfies both surfaces so the routes return their normal status codes instead
+// of throwing on an absent io server (createTestApp() does not attach one).
+// ---------------------------------------------------------------------------
+
+/** Minimal broadcast surface: `io.to(room).emit(event, payload)` for fan-out. */
+interface BroadcastOperatorStub {
+  emit(event: string, ...args: unknown[]): boolean;
+}
+
+/** Minimal room-operator surface: `io.in(room).socketsJoin/socketsLeave(...)`. */
+interface RoomOperatorStub {
+  socketsJoin(rooms: string | string[]): void;
+  socketsLeave(rooms: string | string[]): void;
+}
+
+/** Minimal Socket.io server surface read via `req.app.get('io')`. */
+interface IoStub {
+  to(room: string): BroadcastOperatorStub;
+  in(room: string): RoomOperatorStub;
+}
+
+/** No-op Socket.io stub — every broadcast / room mutation is swallowed. */
+const ioStub: IoStub = {
+  to: (): BroadcastOperatorStub => ({
+    emit: (): boolean => true,
+  }),
+  in: (): RoomOperatorStub => ({
+    socketsJoin: (): void => undefined,
+    socketsLeave: (): void => undefined,
+  }),
+};
+
+describe('Direct message routes — GET /api/dms, POST /api/dms, GET/POST /api/dms/:id/messages', () => {
   let app: Application;
 
   beforeAll(() => {
-    // createTestApp() builds the bare production Express app. The DM routes read
-    // `req.app.get('io')` but guard the call with an `if (io !== undefined)`
-    // check, so — unlike the message routes — no Socket.io stub is registered
-    // here; the route simply skips the room-join side effect.
     app = createTestApp();
+    // The scoped write route POST /api/dms/:id/messages broadcasts over Socket.io
+    // after a successful create via the shared broadcastCreatedMessage helper
+    // (`req.app.get('io').to(room).emit(...)`), and the POST /api/dms create route
+    // joins both participants to the DM room. createTestApp() builds the bare
+    // production Express app without the index.ts bootstrap that attaches the io
+    // server, so a no-op stub is registered here; otherwise those POSTs would 500
+    // after persistence succeeded. (See /docs/decision-log.md.)
+    app.set('io', ioStub);
   });
 
   beforeEach(async () => {
@@ -231,27 +284,27 @@ describe('Direct message routes — GET /api/dms, POST /api/dms, GET /api/dms/:i
         .expect(404);
     });
 
-    it('returns 400 when targetUserId is missing (Gate 12)', async () => {
+    it('returns 422 when targetUserId is missing (Gate 12)', async () => {
       const { token } = await registerUser();
 
       await request(app)
         .post('/api/dms')
         .set('Authorization', `Bearer ${token}`)
         .send({})
-        .expect(400);
+        .expect(422);
     });
 
-    it('returns 400 when targetUserId is not a cuid (Gate 12)', async () => {
+    it('returns 422 when targetUserId is not a cuid (Gate 12)', async () => {
       const { token } = await registerUser();
 
       await request(app)
         .post('/api/dms')
         .set('Authorization', `Bearer ${token}`)
         .send({ targetUserId: 'not-a-cuid' })
-        .expect(400);
+        .expect(422);
     });
 
-    it('returns 400 for unknown fields per the .strict() schema (Gate 12)', async () => {
+    it('returns 422 for unknown fields per the .strict() schema (Gate 12)', async () => {
       const { token } = await registerUser();
       const { user: bob } = await registerUser();
 
@@ -259,7 +312,7 @@ describe('Direct message routes — GET /api/dms, POST /api/dms, GET /api/dms/:i
         .post('/api/dms')
         .set('Authorization', `Bearer ${token}`)
         .send({ targetUserId: bob.id, extra: 'rejected' })
-        .expect(400);
+        .expect(422);
     });
 
     it('returns 401 without an Authorization header', async () => {
@@ -441,6 +494,8 @@ describe('Direct message routes — GET /api/dms, POST /api/dms, GET /api/dms/:i
       const body = response.body as DmMessagesPage;
       expect(body.messages).toHaveLength(0);
       expect(body.nextCursor).toBeNull();
+      // PAG-001 / covenant #182: an empty timeline has no older page.
+      expect(body.hasMore).toBe(false);
     });
 
     it('returns the timeline for a participating user (author hydrated)', async () => {
@@ -469,6 +524,8 @@ describe('Direct message routes — GET /api/dms, POST /api/dms, GET /api/dms/:i
       expect(first.dmId).toBe(dmId);
       expect(first.author.id).toBe(alice.id);
       expect(body.nextCursor).toBeNull();
+      // A single-message timeline fits in one page: no older page exists.
+      expect(body.hasMore).toBe(false);
     });
 
     it('returns 403 when the caller is not a participant', async () => {
@@ -492,16 +549,16 @@ describe('Direct message routes — GET /api/dms, POST /api/dms, GET /api/dms/:i
         .expect(404);
     });
 
-    it('returns 400 for a malformed dmId in the path (Gate 12)', async () => {
+    it('returns 422 for a malformed dmId in the path (Gate 12)', async () => {
       const { token } = await registerUser();
 
       await request(app)
         .get('/api/dms/not-a-cuid/messages')
         .set('Authorization', `Bearer ${token}`)
-        .expect(400);
+        .expect(422);
     });
 
-    it('returns 400 for a malformed cursor (Gate 12)', async () => {
+    it('returns 422 for a malformed cursor (Gate 12)', async () => {
       const { token: aliceToken } = await registerUser();
       const { user: bob } = await registerUser();
       const dmId = await startDmReturningId(aliceToken, bob.id);
@@ -511,17 +568,17 @@ describe('Direct message routes — GET /api/dms, POST /api/dms, GET /api/dms/:i
       await request(app)
         .get(`/api/dms/${dmId}/messages?cursor=not-a-valid-cursor`)
         .set('Authorization', `Bearer ${aliceToken}`)
-        .expect(400);
+        .expect(422);
     });
 
-    it('returns 400 for a well-formed token whose payload lacks the cursor shape (Gate 12)', async () => {
+    it('returns 422 for a well-formed token whose payload lacks the cursor shape (Gate 12)', async () => {
       const { token: aliceToken } = await registerUser();
       const { user: bob } = await registerUser();
       const dmId = await startDmReturningId(aliceToken, bob.id);
 
       // A token that base64url-decodes to valid JSON but omits the required
       // (createdAt, id) fields must also be rejected: decoding succeeds yet the
-      // payload shape is invalid, so the server returns 400 rather than 500.
+      // payload shape is invalid, so the server returns 422 rather than 500.
       const wrongShapeCursor = Buffer.from(JSON.stringify({ foo: 'bar' }), 'utf8').toString(
         'base64url',
       );
@@ -529,27 +586,27 @@ describe('Direct message routes — GET /api/dms, POST /api/dms, GET /api/dms/:i
       await request(app)
         .get(`/api/dms/${dmId}/messages?cursor=${encodeURIComponent(wrongShapeCursor)}`)
         .set('Authorization', `Bearer ${aliceToken}`)
-        .expect(400);
+        .expect(422);
     });
 
-    it('rejects a non-positive limit with 400 but clamps an over-cap limit to MAX_PAGE_SIZE (Gate 12, §0.8.4)', async () => {
+    it('rejects a non-positive limit with 422 but clamps an over-cap limit to MAX_PAGE_SIZE (Gate 12, §0.8.4)', async () => {
       const { token: aliceToken, user: alice } = await registerUser();
       const { user: bob } = await registerUser();
       const dmId = await startDmReturningId(aliceToken, bob.id);
 
-      // A non-positive limit is still rejected with 400: `.int().positive()`
+      // A non-positive limit is still rejected with 422: `.int().positive()`
       // runs before the clamp transform, so 0 / negatives / non-integers never
       // reach it.
       await request(app)
         .get(`/api/dms/${dmId}/messages?limit=0`)
         .set('Authorization', `Bearer ${aliceToken}`)
-        .expect(400);
+        .expect(422);
 
       // An over-cap limit is CLAMPED to MAX_PAGE_SIZE (capped, not rejected) per
       // the AAP §0.8.4 pagination contract — matching the channel route and the
       // thread-replies clamp. Seed >MAX_PAGE_SIZE messages so the clamp is
       // observable: limit=MAX_PAGE_SIZE+50 yields exactly MAX_PAGE_SIZE (100)
-      // rows and a 200, not a 400.
+      // rows and a 200, not a 422.
       await prismaTest.message.createMany({
         data: Array.from({ length: 120 }, (_, i) => ({
           content: `Message ${i}`,
@@ -566,6 +623,8 @@ describe('Direct message routes — GET /api/dms, POST /api/dms, GET /api/dms/:i
 
       const body = response.body as DmMessagesPage;
       expect(body.messages).toHaveLength(MAX_PAGE_SIZE);
+      // 120 rows exist; the clamped page of 100 leaves 20 older → hasMore true.
+      expect(body.hasMore).toBe(true);
     });
 
     it('returns at most PAGE_SIZE (50) messages by default and a forward cursor', async () => {
@@ -590,6 +649,8 @@ describe('Direct message routes — GET /api/dms, POST /api/dms, GET /api/dms/:i
       const body = response.body as DmMessagesPage;
       expect(body.messages).toHaveLength(PAGE_SIZE);
       expect(typeof body.nextCursor).toBe('string');
+      // 60 rows exist; the first page of 50 leaves 10 older → hasMore true.
+      expect(body.hasMore).toBe(true);
     });
 
     it('supports cursor-based pagination across two non-overlapping pages (50 then 25)', async () => {
@@ -617,6 +678,8 @@ describe('Direct message routes — GET /api/dms, POST /api/dms, GET /api/dms/:i
       const page1 = page1Response.body as DmMessagesPage;
       expect(page1.messages).toHaveLength(PAGE_SIZE);
       expect(typeof page1.nextCursor).toBe('string');
+      // 75 rows exist; page 1 of 50 leaves 25 older → hasMore true.
+      expect(page1.hasMore).toBe(true);
 
       const cursor = page1.nextCursor;
       if (cursor === null) {
@@ -630,6 +693,8 @@ describe('Direct message routes — GET /api/dms, POST /api/dms, GET /api/dms/:i
       const page2 = page2Response.body as DmMessagesPage;
       expect(page2.messages).toHaveLength(25);
       expect(page2.nextCursor).toBeNull();
+      // The final page exhausts the timeline → hasMore false.
+      expect(page2.hasMore).toBe(false);
 
       // The two pages must be disjoint — a cursor page never repeats a row.
       const page1Ids = new Set(page1.messages.map((message) => message.id));
@@ -659,6 +724,8 @@ describe('Direct message routes — GET /api/dms, POST /api/dms, GET /api/dms/:i
       const body = response.body as DmMessagesPage;
       expect(body.messages).toHaveLength(MAX_PAGE_SIZE);
       expect(typeof body.nextCursor).toBe('string');
+      // 120 rows exist; the capped page of 100 leaves 20 older → hasMore true.
+      expect(body.hasMore).toBe(true);
     });
 
     it('excludes thread replies from the main timeline (parentId: null only)', async () => {
@@ -687,6 +754,129 @@ describe('Direct message routes — GET /api/dms, POST /api/dms, GET /api/dms/:i
       }
       expect(only.content).toBe('parent');
       expect(only.parentId).toBeNull();
+      // Only one top-level message is visible → no older page.
+      expect(body.hasMore).toBe(false);
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // POST /api/dms/:id/messages — send a message scoped to the DM (DM-001)
+  //
+  // The scoped write route derives the DM container from the URL path; the body
+  // carries only content (+ optional thread parentId / fileId) and is validated
+  // by the .strict() scopedMessageBodySchema, so a body channelId/dmId is an
+  // unknown key (422). Participation is enforced by the shared createMessage
+  // service ACL (assertDmAccess): 404 for an unknown DM, 403 for a non-member.
+  // -------------------------------------------------------------------------
+  describe('POST /api/dms/:id/messages', () => {
+    it('returns 401 without an Authorization header', async () => {
+      await request(app)
+        .post(`/api/dms/${PLACEHOLDER_CUID}/messages`)
+        .send({ content: 'hi' })
+        .expect(401);
+    });
+
+    it('persists a message scoped to the DM in the path and returns 201', async () => {
+      const { token: aliceToken, user: alice } = await registerUser();
+      const { user: bob } = await registerUser();
+      const dmId = await startDmReturningId(aliceToken, bob.id);
+
+      const response = await request(app)
+        .post(`/api/dms/${dmId}/messages`)
+        .set('Authorization', `Bearer ${aliceToken}`)
+        .send({ content: 'scoped dm message' })
+        .expect(201);
+
+      const body = response.body as MessageWithAuthor;
+      expect(body.content).toBe('scoped dm message');
+      expect(body.dmId).toBe(dmId);
+      expect(body.channelId).toBeNull();
+      expect(body.parentId).toBeNull();
+      expect(body.author.id).toBe(alice.id);
+
+      // The row is persisted against the path DM (not via a body dmId).
+      const persisted = await prismaTest.message.findUnique({ where: { id: body.id } });
+      expect(persisted?.dmId).toBe(dmId);
+    });
+
+    it('derives dmId from the PATH and ignores any channelId/dmId in the body (.strict())', async () => {
+      const { token: aliceToken } = await registerUser();
+      const { user: bob } = await registerUser();
+      const dmId = await startDmReturningId(aliceToken, bob.id);
+
+      // scopedMessageBodySchema is .strict(): a body dmId/channelId is an unknown
+      // key and is rejected with 422, proving the container comes from the path.
+      await request(app)
+        .post(`/api/dms/${dmId}/messages`)
+        .set('Authorization', `Bearer ${aliceToken}`)
+        .send({ content: 'x', dmId: MISSING_CUID })
+        .expect(422);
+    });
+
+    it('creates a single-level thread reply when parentId is supplied', async () => {
+      const { token: aliceToken } = await registerUser();
+      const { user: bob } = await registerUser();
+      const dmId = await startDmReturningId(aliceToken, bob.id);
+
+      const parent = await request(app)
+        .post(`/api/dms/${dmId}/messages`)
+        .set('Authorization', `Bearer ${aliceToken}`)
+        .send({ content: 'parent' })
+        .expect(201);
+      const parentId = (parent.body as MessageWithAuthor).id;
+
+      const reply = await request(app)
+        .post(`/api/dms/${dmId}/messages`)
+        .set('Authorization', `Bearer ${aliceToken}`)
+        .send({ content: 'reply', parentId })
+        .expect(201);
+
+      const body = reply.body as MessageWithAuthor;
+      expect(body.parentId).toBe(parentId);
+      expect(body.dmId).toBe(dmId);
+    });
+
+    it('rejects empty content with 422', async () => {
+      const { token: aliceToken } = await registerUser();
+      const { user: bob } = await registerUser();
+      const dmId = await startDmReturningId(aliceToken, bob.id);
+
+      await request(app)
+        .post(`/api/dms/${dmId}/messages`)
+        .set('Authorization', `Bearer ${aliceToken}`)
+        .send({ content: '' })
+        .expect(422);
+    });
+
+    it('returns 422 when the dm id in the path is not a valid cuid', async () => {
+      const { token } = await registerUser();
+      await request(app)
+        .post('/api/dms/not-a-cuid/messages')
+        .set('Authorization', `Bearer ${token}`)
+        .send({ content: 'hi' })
+        .expect(422);
+    });
+
+    it('returns 404 for an unknown but well-formed dmId', async () => {
+      const { token } = await registerUser();
+      await request(app)
+        .post(`/api/dms/${MISSING_CUID}/messages`)
+        .set('Authorization', `Bearer ${token}`)
+        .send({ content: 'hi' })
+        .expect(404);
+    });
+
+    it('returns 403 when the caller is not a participant of the DM', async () => {
+      const { token: aliceToken } = await registerUser();
+      const { user: bob } = await registerUser();
+      const dmId = await startDmReturningId(aliceToken, bob.id);
+
+      const { token: carolToken } = await registerUser();
+      await request(app)
+        .post(`/api/dms/${dmId}/messages`)
+        .set('Authorization', `Bearer ${carolToken}`)
+        .send({ content: 'intruder' })
+        .expect(403);
     });
   });
 

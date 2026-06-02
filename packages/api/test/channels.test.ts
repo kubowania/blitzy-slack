@@ -8,6 +8,7 @@
  *   - POST   /api/channels/:id/join
  *   - POST   /api/channels/:id/leave
  *   - GET    /api/channels/:id/messages?cursor=&limit=
+ *   - POST   /api/channels/:id/messages
  *
  * Compliance:
  *   Rule 3  — Zero-warning strict TypeScript. The test-file ESLint block relaxes
@@ -33,11 +34,11 @@
  * Behavioral contract verified against the IMPLEMENTED route/service
  * (`src/routes/channels.ts`, `src/services/channels.service.ts`), NOT the
  * assigned-file prompt's illustrative sketch. The verified differences —
- * GET /:id/messages returns a `{ messages, nextCursor }` envelope (there is NO
- * `hasMore` field; "more remains" is expressed by a non-null `nextCursor`); a
- * `limit` above MAX_PAGE_SIZE is CLAMPED to MAX_PAGE_SIZE by the query schema
- * (capped, not rejected) per §0.8.4; POST /:id/join is idempotent and returns
- * 200 (never 409);
+ * GET /:id/messages returns a `{ messages, nextCursor, hasMore }` envelope
+ * (`hasMore` is the explicit boolean required by covenant #182, and parallels a
+ * non-null `nextCursor`); a `limit` above MAX_PAGE_SIZE is CLAMPED to
+ * MAX_PAGE_SIZE by the query schema (capped, not rejected) per §0.8.4;
+ * POST /:id/join is idempotent and returns 200 (never 409);
  * and the channel routes emit no Socket.io events so no `io` stub is required —
  * are recorded in /docs/decision-log.md per the Explainability rule (AAP §0.8.3),
  * not in these comments.
@@ -81,13 +82,15 @@ import {
 /**
  * Paginated channel message-history payload returned by
  * `GET /api/channels/:id/messages`: one page of top-level messages
- * (newest-first) plus the opaque cursor for the next (older) page, or `null`
- * when the timeline is exhausted. There is no `hasMore` field — a non-null
- * `nextCursor` is the signal that another page remains.
+ * (newest-first), the opaque cursor for the next (older) page (`null` when the
+ * timeline is exhausted), and the explicit `hasMore` boolean (covenant #182)
+ * which is `true` whenever another page remains and mirrors a non-null
+ * `nextCursor`.
  */
 interface ChannelMessagesPage {
   messages: MessageWithAuthor[];
   nextCursor: string | null;
+  hasMore: boolean;
 }
 
 /**
@@ -111,14 +114,42 @@ const MISSING_CUID = 'clxnonexistent00000000000';
 /** A well-formed cuid used only in unauthenticated path tests (never resolved). */
 const PLACEHOLDER_CUID = 'clx0000000000000000000000';
 
-describe('Channel routes — GET/POST /api/channels, POST /:id/join, POST /:id/leave, GET /:id/messages', () => {
+/**
+ * Minimal Socket.io broadcast surface the scoped `POST /api/channels/:id/messages`
+ * route invokes through `broadcastCreatedMessage` (`io.to(room).emit(event, ...)`
+ * for the MESSAGE_NEW / MESSAGE_UPDATED fan-out).
+ */
+interface BroadcastOperatorStub {
+  emit(event: string, ...args: unknown[]): boolean;
+}
+
+/** Minimal Socket.io server surface read via `req.app.get('io')` (`.to(room)`). */
+interface IoStub {
+  to(room: string): BroadcastOperatorStub;
+}
+
+/**
+ * No-op Socket.io stub: `to(room).emit(...)` is swallowed so the scoped
+ * message-send route returns its normal 201 instead of throwing on an absent io
+ * server (createTestApp() does not attach one). The create/join/leave routes
+ * broadcast nothing and never touch this stub.
+ */
+const ioStub: IoStub = {
+  to: (): BroadcastOperatorStub => ({
+    emit: (): boolean => true,
+  }),
+};
+
+describe('Channel routes — GET/POST /api/channels, POST /:id/join, POST /:id/leave, GET/POST /:id/messages', () => {
   let app: Application;
 
   beforeAll(() => {
-    // createTestApp() builds the bare production Express app. The channel routes
-    // emit NO Socket.io events (channel create/join/leave broadcast nothing per
-    // AAP §0.4.5), so — unlike the message routes — no `io` stub is registered.
+    // createTestApp() builds the bare production Express app. The create/join/leave
+    // routes emit no Socket.io events, but the scoped POST /:id/messages route
+    // broadcasts via `req.app.get('io')`, so a no-op io stub is registered here;
+    // otherwise that POST would 500 after persistence succeeded.
     app = createTestApp();
+    app.set('io', ioStub);
   });
 
   beforeEach(async () => {
@@ -232,52 +263,52 @@ describe('Channel routes — GET/POST /api/channels, POST /:id/join, POST /:id/l
   });
 
   describe('POST /api/channels — Gate 12 validation (createChannelSchema)', () => {
-    it('rejects a name with capital letters (regex /^[a-z0-9_-]+$/) with 400', async () => {
+    it('rejects a name with capital letters (regex /^[a-z0-9_-]+$/) with 422', async () => {
       const { token } = await registerUser();
       await request(app)
         .post('/api/channels')
         .set('Authorization', `Bearer ${token}`)
         .send({ name: 'General', isPrivate: false })
-        .expect(400);
+        .expect(422);
     });
 
-    it('rejects a name containing spaces with 400', async () => {
+    it('rejects a name containing spaces with 422', async () => {
       const { token } = await registerUser();
       await request(app)
         .post('/api/channels')
         .set('Authorization', `Bearer ${token}`)
         .send({ name: 'general chat', isPrivate: false })
-        .expect(400);
+        .expect(422);
     });
 
-    it('rejects a name containing special characters with 400', async () => {
+    it('rejects a name containing special characters with 422', async () => {
       const { token } = await registerUser();
       await request(app)
         .post('/api/channels')
         .set('Authorization', `Bearer ${token}`)
         .send({ name: 'general!@#', isPrivate: false })
-        .expect(400);
+        .expect(422);
     });
 
-    it('rejects a name exceeding MAX_CHANNEL_NAME_LENGTH with 400', async () => {
+    it('rejects a name exceeding MAX_CHANNEL_NAME_LENGTH with 422', async () => {
       const { token } = await registerUser();
       await request(app)
         .post('/api/channels')
         .set('Authorization', `Bearer ${token}`)
         .send({ name: 'a'.repeat(MAX_CHANNEL_NAME_LENGTH + 1), isPrivate: false })
-        .expect(400);
+        .expect(422);
     });
 
-    it('rejects an empty name with 400', async () => {
+    it('rejects an empty name with 422', async () => {
       const { token } = await registerUser();
       await request(app)
         .post('/api/channels')
         .set('Authorization', `Bearer ${token}`)
         .send({ name: '', isPrivate: false })
-        .expect(400);
+        .expect(422);
     });
 
-    it('rejects a description exceeding MAX_CHANNEL_DESCRIPTION_LENGTH with 400', async () => {
+    it('rejects a description exceeding MAX_CHANNEL_DESCRIPTION_LENGTH with 422', async () => {
       const { token } = await registerUser();
       await request(app)
         .post('/api/channels')
@@ -287,34 +318,34 @@ describe('Channel routes — GET/POST /api/channels, POST /:id/join, POST /:id/l
           description: 'a'.repeat(MAX_CHANNEL_DESCRIPTION_LENGTH + 1),
           isPrivate: false,
         })
-        .expect(400);
+        .expect(422);
     });
 
-    it('rejects a missing isPrivate flag with 400 (the schema declares no default)', async () => {
+    it('rejects a missing isPrivate flag with 422 (the schema declares no default)', async () => {
       const { token } = await registerUser();
       await request(app)
         .post('/api/channels')
         .set('Authorization', `Bearer ${token}`)
         .send({ name: uniqueChannelName() })
-        .expect(400);
+        .expect(422);
     });
 
-    it('rejects isPrivate sent as a string instead of a boolean with 400', async () => {
+    it('rejects isPrivate sent as a string instead of a boolean with 422', async () => {
       const { token } = await registerUser();
       await request(app)
         .post('/api/channels')
         .set('Authorization', `Bearer ${token}`)
         .send({ name: uniqueChannelName(), isPrivate: 'false' })
-        .expect(400);
+        .expect(422);
     });
 
-    it('rejects unknown fields per the .strict() schema with 400', async () => {
+    it('rejects unknown fields per the .strict() schema with 422', async () => {
       const { token } = await registerUser();
       await request(app)
         .post('/api/channels')
         .set('Authorization', `Bearer ${token}`)
         .send({ name: uniqueChannelName(), isPrivate: false, ownerId: 'malicious' })
-        .expect(400);
+        .expect(422);
     });
   });
 
@@ -473,15 +504,15 @@ describe('Channel routes — GET/POST /api/channels, POST /:id/join, POST /:id/l
         .expect(404);
     });
 
-    it('returns 400 when the channel id is not a valid cuid', async () => {
+    it('returns 422 when the channel id is not a valid cuid', async () => {
       const { token } = await registerUser();
       await request(app)
         .post('/api/channels/not-a-cuid/join')
         .set('Authorization', `Bearer ${token}`)
-        .expect(400);
+        .expect(422);
     });
 
-    it('is idempotent — re-joining returns 200 (or 409 by implementation choice)', async () => {
+    it('is idempotent — re-joining returns 200 every time (upsert, never 409)', async () => {
       const { token: ownerToken } = await registerUser();
       const channelId = await createChannelReturningId(ownerToken, false);
 
@@ -491,10 +522,36 @@ describe('Channel routes — GET/POST /api/channels, POST /:id/join, POST /:id/l
         .set('Authorization', `Bearer ${joinerToken}`)
         .expect(200);
 
+      // The join is written with an atomic upsert on the (channelId, userId)
+      // unique constraint (OBS-001), so a re-join never trips P2002 and always
+      // resolves to a 200 — never a 409.
       const response = await request(app)
         .post(`/api/channels/${channelId}/join`)
-        .set('Authorization', `Bearer ${joinerToken}`);
-      expect([200, 409]).toContain(response.status);
+        .set('Authorization', `Bearer ${joinerToken}`)
+        .expect(200);
+      expect((response.body as Channel).id).toBe(channelId);
+    });
+
+    it('keeps the membership row unique and preserves role across repeated joins (OBS-001)', async () => {
+      const { token: ownerToken } = await registerUser();
+      const channelId = await createChannelReturningId(ownerToken, false);
+
+      const { token: joinerToken, user: joiner } = await registerUser();
+
+      // Three idempotent joins in a row. The upsert's empty `update: {}` means a
+      // re-join is a no-op that neither duplicates the row nor downgrades a role.
+      for (let i = 0; i < 3; i++) {
+        await request(app)
+          .post(`/api/channels/${channelId}/join`)
+          .set('Authorization', `Bearer ${joinerToken}`)
+          .expect(200);
+      }
+
+      const memberships = await prismaTest.channelMember.findMany({
+        where: { channelId, userId: joiner.id },
+      });
+      expect(memberships).toHaveLength(1);
+      expect(memberships[0]?.role).toBe('member');
     });
   });
 
@@ -558,12 +615,12 @@ describe('Channel routes — GET/POST /api/channels, POST /:id/join, POST /:id/l
       await request(app).get(`/api/channels/${PLACEHOLDER_CUID}`).expect(401);
     });
 
-    it('returns 400 when the channel id is not a valid cuid', async () => {
+    it('returns 422 when the channel id is not a valid cuid', async () => {
       const { token } = await registerUser();
       await request(app)
         .get('/api/channels/not-a-cuid')
         .set('Authorization', `Bearer ${token}`)
-        .expect(400);
+        .expect(422);
     });
 
     it('returns 404 when the channel id is a valid cuid with no matching row', async () => {
@@ -672,6 +729,7 @@ describe('Channel routes — GET/POST /api/channels, POST /:id/join, POST /:id/l
       const body = response.body as ChannelMessagesPage;
       expect(body.messages).toEqual([]);
       expect(body.nextCursor).toBeNull();
+      expect(body.hasMore).toBe(false);
     });
 
     it('returns up to PAGE_SIZE (50) messages by default with a forward cursor', async () => {
@@ -697,6 +755,8 @@ describe('Channel routes — GET/POST /api/channels, POST /:id/join, POST /:id/l
       const body = response.body as ChannelMessagesPage;
       expect(body.messages).toHaveLength(PAGE_SIZE);
       expect(typeof body.nextCursor).toBe('string');
+      // 60 messages seeded, 50 returned → another page remains (covenant #182).
+      expect(body.hasMore).toBe(true);
     });
 
     it('honours an explicit limit up to MAX_PAGE_SIZE (100)', async () => {
@@ -737,7 +797,7 @@ describe('Channel routes — GET/POST /api/channels, POST /:id/join, POST /:id/l
       });
 
       // Per the AAP §0.8.4 pagination contract the schema CLAMPS an over-cap
-      // `limit` to MAX_PAGE_SIZE and returns 200 (it does NOT reject with 400);
+      // `limit` to MAX_PAGE_SIZE and returns 200 (it does NOT reject with 422);
       // a non-positive / non-integer limit is still rejected by `.positive()` /
       // `.int()`, which run before the clamp transform (asserted elsewhere).
       const response = await request(app)
@@ -786,6 +846,8 @@ describe('Channel routes — GET/POST /api/channels, POST /:id/join, POST /:id/l
       const page2 = page2Response.body as ChannelMessagesPage;
       expect(page2.messages).toHaveLength(25);
       expect(page2.nextCursor).toBeNull();
+      // Final page exhausts the timeline → hasMore is false (covenant #182).
+      expect(page2.hasMore).toBe(false);
 
       // The two pages must be disjoint — a cursor page never repeats a row.
       const page1Ids = new Set(page1.messages.map((message) => message.id));
@@ -904,14 +966,14 @@ describe('Channel routes — GET/POST /api/channels, POST /:id/join, POST /:id/l
         .expect(404);
     });
 
-    it('returns 400 for a malformed cursor', async () => {
+    it('returns 422 for a malformed cursor', async () => {
       const { token } = await registerUser();
       const channelId = await createChannelReturningId(token, false);
 
       await request(app)
         .get(`/api/channels/${channelId}/messages?cursor=not-a-valid-cursor!!!`)
         .set('Authorization', `Bearer ${token}`)
-        .expect(400);
+        .expect(422);
     });
   });
 
@@ -943,6 +1005,107 @@ describe('Channel routes — GET/POST /api/channels, POST /:id/join, POST /:id/l
       expect(body.messages).toHaveLength(PAGE_SIZE);
       // Gate 9: channel history load < 1 second.
       expect(elapsedMs).toBeLessThan(1000);
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // POST /api/channels/:id/messages — scoped channel message write (CHAN-002)
+  // -------------------------------------------------------------------------
+  describe('POST /api/channels/:id/messages', () => {
+    it('returns 401 without an Authorization header', async () => {
+      await request(app)
+        .post(`/api/channels/${PLACEHOLDER_CUID}/messages`)
+        .send({ content: 'hi' })
+        .expect(401);
+    });
+
+    it('persists a message scoped to the channel in the path and returns 201', async () => {
+      const { token, user } = await registerUser();
+      const channelId = await createChannelReturningId(token, false);
+
+      const response = await request(app)
+        .post(`/api/channels/${channelId}/messages`)
+        .set('Authorization', `Bearer ${token}`)
+        .send({ content: 'scoped channel message' })
+        .expect(201);
+
+      const body = response.body as MessageWithAuthor;
+      expect(body.content).toBe('scoped channel message');
+      expect(body.channelId).toBe(channelId);
+      expect(body.dmId).toBeNull();
+      expect(body.parentId).toBeNull();
+      expect(body.author.id).toBe(user.id);
+
+      // The row is persisted against the path channel (not via a body channelId).
+      const persisted = await prismaTest.message.findUnique({ where: { id: body.id } });
+      expect(persisted?.channelId).toBe(channelId);
+    });
+
+    it('derives channelId from the PATH and ignores any channelId/dmId in the body (.strict())', async () => {
+      const { token } = await registerUser();
+      const channelId = await createChannelReturningId(token, false);
+
+      // scopedMessageBodySchema is .strict(): a body channelId/dmId is an unknown
+      // key and is rejected with 422, proving the container comes from the path.
+      await request(app)
+        .post(`/api/channels/${channelId}/messages`)
+        .set('Authorization', `Bearer ${token}`)
+        .send({ content: 'x', channelId: MISSING_CUID })
+        .expect(422);
+    });
+
+    it('creates a single-level thread reply when parentId is supplied', async () => {
+      const { token } = await registerUser();
+      const channelId = await createChannelReturningId(token, false);
+
+      const parent = await request(app)
+        .post(`/api/channels/${channelId}/messages`)
+        .set('Authorization', `Bearer ${token}`)
+        .send({ content: 'parent' })
+        .expect(201);
+      const parentId = (parent.body as MessageWithAuthor).id;
+
+      const reply = await request(app)
+        .post(`/api/channels/${channelId}/messages`)
+        .set('Authorization', `Bearer ${token}`)
+        .send({ content: 'reply', parentId })
+        .expect(201);
+
+      const body = reply.body as MessageWithAuthor;
+      expect(body.parentId).toBe(parentId);
+      expect(body.channelId).toBe(channelId);
+    });
+
+    it('rejects empty content with 422', async () => {
+      const { token } = await registerUser();
+      const channelId = await createChannelReturningId(token, false);
+
+      await request(app)
+        .post(`/api/channels/${channelId}/messages`)
+        .set('Authorization', `Bearer ${token}`)
+        .send({ content: '' })
+        .expect(422);
+    });
+
+    it('returns 422 when the channel id in the path is not a valid cuid', async () => {
+      const { token } = await registerUser();
+      await request(app)
+        .post('/api/channels/not-a-cuid/messages')
+        .set('Authorization', `Bearer ${token}`)
+        .send({ content: 'hi' })
+        .expect(422);
+    });
+
+    it('returns 403 when a non-member posts to a private channel', async () => {
+      const { token: ownerToken } = await registerUser();
+      const channelId = await createChannelReturningId(ownerToken, true);
+
+      const { token: outsiderToken } = await registerUser();
+      await request(app)
+        .post(`/api/channels/${channelId}/messages`)
+        .set('Authorization', `Bearer ${outsiderToken}`)
+        .send({ content: 'intruder' })
+        .expect(403);
     });
   });
 });

@@ -495,6 +495,54 @@ export async function createMessage(input: SendMessageServiceInput): Promise<Mes
 }
 
 /**
+ * Fetch a single message by id, fully hydrated (author, reactions, file, and
+ * reply count), enforcing the same channel/DM access control as the timeline
+ * and thread endpoints.
+ *
+ * Backs `GET /api/messages/:id` (single-message detail) and the
+ * `message:updated` realtime re-hydration path (re-reading a thread parent after
+ * a reply is created so its authoritative `replyCount` can be broadcast).
+ *
+ * @param input - the target message id and the authenticated caller id.
+ * @returns the fully-hydrated {@link MessageWithAuthor} DTO.
+ * @throws {NotFoundError} when the message does not exist.
+ * @throws {ForbiddenError} when the caller lacks access to the message's channel/DM.
+ * @throws {ValidationError} when the message has neither a channel nor a DM
+ *   context (a defensive guard against a corrupted row).
+ */
+export async function getMessageById(input: {
+  messageId: string;
+  userId: string;
+}): Promise<MessageWithAuthor> {
+  const { messageId, userId } = input;
+
+  const record = await prisma.message.findUnique({
+    where: { id: messageId },
+    include: {
+      author: true,
+      reactions: true,
+      file: true,
+      _count: { select: { replies: true } },
+    },
+  });
+  if (record === null) {
+    throw new NotFoundError('Message not found');
+  }
+
+  // Access control on the message's containing channel/DM, identical to the
+  // timeline and thread reads.
+  if (record.channelId !== null) {
+    await assertChannelAccess(record.channelId, userId);
+  } else if (record.dmId !== null) {
+    await assertDmAccess(record.dmId, userId);
+  } else {
+    throw new ValidationError('Message has no channel or DM context');
+  }
+
+  return toMessageDto(record, userId);
+}
+
+/**
  * List a parent message's replies, oldest-first (chronological reading order
  * for the thread panel), paginated by an opaque cursor.
  *
@@ -521,9 +569,9 @@ export async function listThreadReplies(
   const { parentId, userId, cursor } = input;
   const limit = resolveReplyLimit(input.limit);
 
-  // The parent is fully hydrated (author, reactions, file, reply count) because
-  // the thread response returns it alongside the replies so the panel can
-  // render the thread root without a second round trip.
+  // The parent is fully hydrated (author, reactions, file, reply count) and
+  // returned alongside the replies, letting the thread panel render the thread
+  // root in a single round trip.
   const parent = await prisma.message.findUnique({
     where: { id: parentId },
     include: {

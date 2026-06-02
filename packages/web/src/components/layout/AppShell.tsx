@@ -1,9 +1,10 @@
 import * as React from 'react';
-import { Outlet } from 'react-router';
+import { Outlet, useLocation } from 'react-router';
 
 import { Header } from '@/components/layout/Header';
 import { Sidebar } from '@/components/layout/Sidebar';
 import { WorkspaceNavRail } from '@/components/layout/WorkspaceNavRail';
+import { Sheet, SheetContent, SheetDescription, SheetTitle } from '@/components/ui/sheet';
 import { useHydratePresence, useInitPresence } from '@/hooks/usePresence';
 import { useConnectSocket } from '@/hooks/useSocket';
 import { useDms } from '@/hooks/useDms';
@@ -26,10 +27,13 @@ import { cn } from '@/lib/utils';
  * only the inner scroll regions (the sidebar lists, the message timeline)
  * scroll. `min-w-0` on the content column lets long unbroken content (such as a
  * URL in a message) shrink instead of widening the layout past the viewport.
- * The three-column structure is a desktop-only layout (the reference Slack web
- * screenshots are desktop captures); a `min-w-[768px]` guard preserves those
- * desktop proportions on narrower viewports, so the page scrolls horizontally
- * below 768px instead of compressing the columns into an unusable width.
+ *
+ * The layout is responsive. At the `md` breakpoint and wider the nav rail and
+ * sidebar are docked as the first two columns. Below `md` they are removed from
+ * the flow and instead presented in an off-canvas `Sheet` drawer opened from a
+ * hamburger button in the {@link Header}; the content column then fills the full
+ * viewport width, so there is no horizontal overflow on phone-width screens. The
+ * drawer closes automatically on navigation (a route change collapses it).
  * Rationale: /docs/decision-log.md.
  *
  * A visually-hidden "Skip to main content" link is the first focusable element,
@@ -53,6 +57,15 @@ export function AppShell({ className, ...props }: React.ComponentProps<'div'>) {
   useConnectSocket();
   useInitPresence();
 
+  // Mobile navigation drawer state. The docked nav rail + sidebar are hidden
+  // below the `md` breakpoint; this drawer surfaces the same chrome on phones.
+  const [mobileNavOpen, setMobileNavOpen] = React.useState<boolean>(false);
+  const location = useLocation();
+  // Collapse the drawer on navigation so tapping a channel/DM closes it.
+  React.useEffect(() => {
+    setMobileNavOpen(false);
+  }, [location.pathname]);
+
   // Hydrate presence for everyone shown in the sidebar's Direct Messages list
   // so their dots reflect the authoritative Redis-computed state on first paint
   // (AAP §0.6.2) instead of defaulting to offline until a transition broadcast
@@ -71,10 +84,7 @@ export function AppShell({ className, ...props }: React.ComponentProps<'div'>) {
 
   return (
     <div
-      className={cn(
-        'flex h-screen min-w-[768px] overflow-hidden bg-background text-foreground',
-        className,
-      )}
+      className={cn('flex h-screen overflow-hidden bg-background text-foreground', className)}
       {...props}
     >
       <a
@@ -83,10 +93,28 @@ export function AppShell({ className, ...props }: React.ComponentProps<'div'>) {
       >
         Skip to main content
       </a>
-      <WorkspaceNavRail />
-      <Sidebar />
+
+      {/* Docked chrome — visible at `md` and wider; hidden on phones where it is
+          replaced by the off-canvas drawer below. */}
+      <WorkspaceNavRail className="hidden md:flex" />
+      <Sidebar className="hidden md:flex" />
+
+      {/* Off-canvas navigation drawer for phone-width viewports. Mounts the same
+          nav rail + sidebar side by side; the content is only in the DOM while
+          open (Radix unmounts the portal on close). */}
+      <Sheet open={mobileNavOpen} onOpenChange={setMobileNavOpen}>
+        <SheetContent side="left" className="flex w-80 max-w-[85vw] flex-row gap-0 p-0 md:hidden">
+          <SheetTitle className="sr-only">Navigation</SheetTitle>
+          <SheetDescription className="sr-only">
+            Workspace channels and direct messages
+          </SheetDescription>
+          <WorkspaceNavRail />
+          <Sidebar className="flex-1" />
+        </SheetContent>
+      </Sheet>
+
       <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
-        <Header />
+        <Header onOpenMobileNav={() => setMobileNavOpen(true)} />
         <main
           id="main-content"
           tabIndex={-1}

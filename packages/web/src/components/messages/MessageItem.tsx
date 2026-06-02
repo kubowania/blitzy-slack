@@ -218,12 +218,17 @@ export function MessageItem({
       </div>
 
       {/* Action toolbar revealed on hover OR keyboard focus within the message
-          (group-focus-within), so keyboard users get an equivalent reveal. */}
+          (group-focus-within), so keyboard users get an equivalent reveal. The
+          toolbar stays `pointer-events-auto` at all times (it is NOT gated on
+          group-hover): because it is positioned `-top-3` it protrudes above the
+          article's box, and gating interactivity on the article's hover left the
+          protruding buttons in a non-interactive dead zone (THREAD-001 /
+          REACT-001). Keeping it always interactive makes "visible == clickable";
+          opacity alone drives the hover/focus reveal for visual fidelity. */}
       <div
         className={cn(
           'absolute -top-3 right-4 z-10',
           'opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100',
-          'pointer-events-none group-hover:pointer-events-auto group-focus-within:pointer-events-auto',
           'flex items-center gap-0.5 rounded-md border border-border bg-popover p-0.5 shadow-md',
         )}
         role="toolbar"

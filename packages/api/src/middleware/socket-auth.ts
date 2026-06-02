@@ -8,9 +8,7 @@
  *
  * Real-time contract (AAP Rule 2): WebSocket connections are authenticated
  * identically to HTTP routes. The token travels in the handshake exclusively
- * via `socket.handshake.auth.token`; query-string tokens are NOT accepted
- * because they are prone to leaking into access logs, browser history, and
- * diagnostics.
+ * via `socket.handshake.auth.token`; query-string tokens are NOT accepted.
  *
  * Single-verifier discipline (AAP §0.8.4): verification is delegated to the
  * SAME `verifyToken` helper the HTTP `requireAuth` middleware uses; this module
@@ -48,8 +46,8 @@ interface SocketData {
 
 /**
  * A handshake-stage socket carrying the {@link SocketData} identity payload.
- * The three event-map type arguments are left at Socket.io's defaults because
- * this middleware reads only the handshake and writes only `socket.data`; it
+ * The three event-map type arguments are left at Socket.io's defaults: this
+ * middleware reads only the handshake and writes only `socket.data`, and
  * neither listens for nor emits domain events.
  */
 type HandshakeSocket = Socket<DefaultEventsMap, DefaultEventsMap, DefaultEventsMap, SocketData>;
@@ -59,12 +57,11 @@ type HandshakeSocket = Socket<DefaultEventsMap, DefaultEventsMap, DefaultEventsM
  * (`handshake.auth.token`). Returns the token string, or `undefined` when it is
  * missing or is not a non-empty string.
  *
- * Only `handshake.auth.token` is honored — query-string tokens are rejected
- * because they leak into access logs, browser history, and diagnostics. The web
- * client always sends the token via `auth.token`.
+ * Only `handshake.auth.token` is honored — query-string tokens are rejected.
+ * The web client always sends the token via `auth.token`.
  *
- * The `auth` value is read through an `unknown` binding because Socket.io types
- * `handshake.auth` with an `any`-valued index signature; the `typeof` guard
+ * The `auth` value is read through an `unknown` binding: Socket.io types
+ * `handshake.auth` with an `any`-valued index signature, and the `typeof` guard
  * narrows it back to a concrete `string`. This helper never throws.
  */
 const extractToken = (socket: HandshakeSocket): string | undefined => {
@@ -82,8 +79,8 @@ const extractToken = (socket: HandshakeSocket): string | undefined => {
  * On success it attaches `userId` and `email` to `socket.data` and calls
  * `next()`. On a missing or invalid token it emits a structured `warn` log line
  * and calls `next(new Error('Unauthorized'))`, which Socket.io delivers to the
- * client as a `connect_error`. The middleware is synchronous because
- * `verifyToken` performs a synchronous HS256 verification.
+ * client as a `connect_error`. The middleware is synchronous; `verifyToken`
+ * performs a synchronous HS256 verification.
  *
  * @param socket - The connecting socket, at handshake time (pre-`connection`).
  * @param next - Socket.io continuation callback: called with no argument to

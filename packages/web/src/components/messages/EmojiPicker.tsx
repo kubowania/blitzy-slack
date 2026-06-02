@@ -2,6 +2,7 @@ import * as React from 'react';
 
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { ScrollArea } from '@/components/ui/scroll-area';
@@ -20,7 +21,11 @@ import { cn } from '@/lib/utils';
  * This file owns ONLY the picker overlay (search input + tabbed category grid).
  * Supplying the element that opens the picker is the consumer's responsibility:
  * the consumer passes it as the `trigger` prop, which is rendered inside a
- * `PopoverTrigger asChild`.
+ * `PopoverTrigger asChild`. When the consumer also supplies a `tooltip`, the
+ * picker wraps that `PopoverTrigger` in a `TooltipTrigger asChild` (Tooltip
+ * trigger OUTER, Popover trigger INNER, closest to the button) so the same
+ * button forwards both the open-toggle and the hover hint — the nesting order
+ * proven to keep both interactions working.
  *
  * For this proof-of-concept the emoji data set is a curated list of popular
  * Unicode emojis grouped into nine categories; the full Unicode set and
@@ -164,6 +169,14 @@ const ALL_EMOJIS: readonly string[] = EMOJI_CATEGORIES.flatMap((c) => c.emojis);
 export interface EmojiPickerProps {
   /** Trigger element (the consumer-supplied button that opens the picker). */
   trigger: React.ReactNode;
+  /**
+   * Optional hover-hint text. When provided, the trigger button is additionally
+   * wrapped in a Radix Tooltip whose `TooltipTrigger` sits OUTSIDE the
+   * `PopoverTrigger` (both `asChild`), so the single button receives the
+   * popover open-toggle and the tooltip hover hint without one trigger
+   * intercepting the other.
+   */
+  tooltip?: string;
   /** Called when the user selects an emoji. */
   onSelect: (emoji: string) => void;
   /** Controlled-open mode (optional). If omitted, internal state is used. */
@@ -185,6 +198,7 @@ export interface EmojiPickerProps {
  */
 export function EmojiPicker({
   trigger,
+  tooltip,
   onSelect,
   open,
   onOpenChange,
@@ -242,7 +256,20 @@ export function EmojiPicker({
 
   return (
     <Popover open={actualOpen} onOpenChange={setOpen}>
-      <PopoverTrigger asChild>{trigger}</PopoverTrigger>
+      {tooltip !== undefined ? (
+        // Tooltip trigger OUTER, Popover trigger INNER (closest to the button):
+        // the same nesting WorkspaceNavRail uses for its account menu. The
+        // Popover is the outermost disclosure root; the Tooltip wraps only the
+        // trigger + hint.
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <PopoverTrigger asChild>{trigger}</PopoverTrigger>
+          </TooltipTrigger>
+          <TooltipContent>{tooltip}</TooltipContent>
+        </Tooltip>
+      ) : (
+        <PopoverTrigger asChild>{trigger}</PopoverTrigger>
+      )}
       <PopoverContent
         align={align}
         side={side}

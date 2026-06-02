@@ -11,7 +11,7 @@
  *   Rule 4  — Every test user is created through `registerUser()`
  *             (`POST /api/auth/register`); no direct Prisma user inserts.
  *   Gate 10 — Observability: every response carries an `X-Request-Id` header.
- *   Gate 12 — Zod validation on `q` (over-length / unknown key → 400) and every
+ *   Gate 12 — Zod validation on `q` (over-length / unknown key → 422) and every
  *             backend endpoint has at least one integration test.
  *
  * AAP refs: §0.1.1 (DMs people picker), §0.5.2 (StartDmDialog), §0.8.2
@@ -118,7 +118,7 @@ describe('GET /api/users', () => {
   // Validation (Gate 12) — valid token, invalid query
   // ---------------------------------------------------------------------------
   describe('validation', () => {
-    it(`returns 400 when q exceeds ${String(MAX_DISPLAY_NAME_LENGTH)} characters`, async () => {
+    it(`returns 422 when q exceeds ${String(MAX_DISPLAY_NAME_LENGTH)} characters`, async () => {
       const { token } = await registerUser();
       const tooLong = 'a'.repeat(MAX_DISPLAY_NAME_LENGTH + 1);
 
@@ -126,21 +126,21 @@ describe('GET /api/users', () => {
         .get('/api/users')
         .query({ q: tooLong })
         .set('Authorization', `Bearer ${token}`)
-        .expect(400);
+        .expect(422);
 
       const body = response.body as ErrorResponseBody;
-      expect(body.error).toBe('BadRequest');
+      expect(body.error).toBe('UnprocessableEntity');
       expect(typeof body.message).toBe('string');
     });
 
-    it('returns 400 for an unknown query key (.strict())', async () => {
+    it('returns 422 for an unknown query key (.strict())', async () => {
       const { token } = await registerUser();
 
       await request(app)
         .get('/api/users')
         .query({ q: 'alice', unexpected: 'value' })
         .set('Authorization', `Bearer ${token}`)
-        .expect(400);
+        .expect(422);
     });
   });
 

@@ -12,7 +12,7 @@
  *   Rule 4  — Every test user is created through `registerUser()`
  *             (`POST /api/auth/register`); no direct Prisma user inserts.
  *   Gate 10 — Observability: every response carries an `X-Request-Id` header.
- *   Gate 12 — Zod validation on `userIds` (missing/empty/non-cuid/over-cap → 400)
+ *   Gate 12 — Zod validation on `userIds` (missing/empty/non-cuid/over-cap → 422)
  *             and every backend endpoint has at least one integration test.
  *
  * AAP refs: §0.1.1 (presence), §0.4.5 (presence:update), §0.8.4 (presence
@@ -123,43 +123,43 @@ describe('GET /api/presence', () => {
   // Validation (Gate 12) — valid token, invalid query
   // ---------------------------------------------------------------------------
   describe('validation', () => {
-    it('returns 400 when userIds is missing', async () => {
+    it('returns 422 when userIds is missing', async () => {
       const { token } = await registerUser();
 
       const response = await request(app)
         .get('/api/presence')
         .set('Authorization', `Bearer ${token}`)
-        .expect(400);
+        .expect(422);
 
       const body = response.body as ErrorResponseBody;
-      expect(body.error).toBe('BadRequest');
+      expect(body.error).toBe('UnprocessableEntity');
       expect(typeof body.message).toBe('string');
     });
 
-    it('returns 400 when userIds is empty', async () => {
+    it('returns 422 when userIds is empty', async () => {
       const { token } = await registerUser();
 
       await request(app)
         .get('/api/presence')
         .query({ userIds: '' })
         .set('Authorization', `Bearer ${token}`)
-        .expect(400);
+        .expect(422);
     });
 
-    it('returns 400 when userIds contains a non-cuid', async () => {
+    it('returns 422 when userIds contains a non-cuid', async () => {
       const { token } = await registerUser();
 
       const response = await request(app)
         .get('/api/presence')
         .query({ userIds: 'not-a-cuid' })
         .set('Authorization', `Bearer ${token}`)
-        .expect(400);
+        .expect(422);
 
       const body = response.body as ErrorResponseBody;
-      expect(body.error).toBe('BadRequest');
+      expect(body.error).toBe('UnprocessableEntity');
     });
 
-    it(`returns 400 when more than ${String(MAX_PRESENCE_QUERY_IDS)} ids are requested`, async () => {
+    it(`returns 422 when more than ${String(MAX_PRESENCE_QUERY_IDS)} ids are requested`, async () => {
       const { token, user } = await registerUser();
       // A list one over the cap, built from a REAL cuid so each entry passes the
       // per-id `cuid()` check and ONLY the `.max(MAX_PRESENCE_QUERY_IDS)` bound
@@ -170,17 +170,17 @@ describe('GET /api/presence', () => {
         .get('/api/presence')
         .query({ userIds: overCap })
         .set('Authorization', `Bearer ${token}`)
-        .expect(400);
+        .expect(422);
     });
 
-    it('returns 400 for an unknown query key (.strict())', async () => {
+    it('returns 422 for an unknown query key (.strict())', async () => {
       const { token, user } = await registerUser();
 
       await request(app)
         .get('/api/presence')
         .query({ userIds: user.id, unexpected: 'value' })
         .set('Authorization', `Bearer ${token}`)
-        .expect(400);
+        .expect(422);
     });
   });
 

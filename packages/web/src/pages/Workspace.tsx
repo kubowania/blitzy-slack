@@ -5,7 +5,8 @@
  *
  * Resolves the authenticated user's channel list and decides where `/app`
  * should land:
- *   - while the list is loading → a centered spinner;
+ *   - while the list is loading → a message-timeline skeleton placeholder that
+ *     mirrors the channel view the user is about to be redirected into;
  *   - when at least one channel exists → a replace-redirect to the FIRST
  *     channel's database id (`channels/<id>`), so the default authenticated view
  *     is a real channel rather than a hardcoded name;
@@ -29,7 +30,7 @@ import {
   EmptyMedia,
   EmptyTitle,
 } from '@/components/ui/empty';
-import { Spinner } from '@/components/ui/spinner';
+import { Skeleton } from '@/components/ui/skeleton';
 import { useChannels } from '@/hooks/useChannels';
 
 /**
@@ -41,8 +42,23 @@ export default function Workspace() {
 
   if (isLoading) {
     return (
-      <div className="flex h-full items-center justify-center">
-        <Spinner className="size-6 text-muted-foreground" />
+      <div
+        role="status"
+        aria-label="Loading workspace"
+        className="flex h-full flex-col gap-6 overflow-hidden p-6"
+      >
+        {[0, 1, 2, 3, 4, 5].map((i) => (
+          <div key={i} className="flex gap-3">
+            <Skeleton className="size-9 shrink-0 rounded-md" />
+            <div className="flex-1 space-y-2">
+              <div className="flex items-center gap-2">
+                <Skeleton className="h-3.5 w-28" />
+                <Skeleton className="h-3 w-12" />
+              </div>
+              <Skeleton className="h-3.5 w-3/4" />
+            </div>
+          </div>
+        ))}
       </div>
     );
   }

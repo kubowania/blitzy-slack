@@ -121,15 +121,16 @@ export const errorHandler: ErrorRequestHandler = (err, req, res, next): void => 
     return;
   }
 
-  // 1. Zod validation errors (from validate.ts middleware)
+  // 1. Zod validation errors (from validate.ts middleware) → 422 Unprocessable
+  //    Entity: the request is well-formed JSON but fails semantic validation.
   if (err instanceof ZodError) {
     const payload: ErrorPayload = {
-      error: 'BadRequest',
+      error: 'UnprocessableEntity',
       message: 'Request validation failed',
       details: formatZodIssues(err.issues),
     };
     log.warn({ err, issues: payload.details }, 'Validation error');
-    res.status(400).json(payload);
+    res.status(422).json(payload);
     return;
   }
 
@@ -218,10 +219,11 @@ export const errorHandler: ErrorRequestHandler = (err, req, res, next): void => 
     return;
   }
 
-  // 5. Application-level custom errors (middleware/errors.ts)
+  // 5. Application-level custom errors (middleware/errors.ts) → 422 Unprocessable
+  //    Entity: a request payload or service-layer invariant is semantically invalid.
   if (err instanceof ValidationError) {
     const payload: ErrorPayload = {
-      error: 'BadRequest',
+      error: 'UnprocessableEntity',
       message: err.message,
       // Surface the per-field validation feedback the `validate.ts` middleware
       // attached (Zod's flattened `fieldErrors`) so clients can identify which
@@ -230,7 +232,7 @@ export const errorHandler: ErrorRequestHandler = (err, req, res, next): void => 
       ...(err.details !== undefined ? { details: err.details } : {}),
     };
     log.warn({ err, details: err.details }, 'Application validation error');
-    res.status(400).json(payload);
+    res.status(422).json(payload);
     return;
   }
   if (err instanceof UnauthorizedError) {

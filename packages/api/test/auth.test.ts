@@ -23,17 +23,17 @@
  *             credentials register once (201) and are idempotent on repeat (409).
  *   Gate 9  — Registration completes within a generous response-time budget.
  *   Gate 10 — Every response carries the Pino-generated `X-Request-Id` header.
- *   Gate 12 — Malformed payloads are rejected with 400 and a structured error body.
+ *   Gate 12 — Malformed payloads are rejected with 422 and a structured error body.
  *   Gate 13 — Contributes line coverage to `src/services/auth.service.ts`.
  *
  * Behavioral contract verified against the IMPLEMENTED route/service
  * (`src/routes/auth.ts`, `src/services/auth.service.ts`,
  * `src/middleware/{auth,validate,error-handler,request-logger}.ts`), NOT the
  * assigned-file prompt's illustrative sketch. The verified differences — the
- * `validate` middleware wraps Zod failures so a 400 body carries a
+ * `validate` middleware wraps Zod failures so a 422 body carries a
  * `details` field→messages MAP (`{ email: ['Required'] }`), not a
  * `[{ path, message, code }]` array; `.strict()` unknown-key violations surface
- * as a 400 with an empty `details` map (the unrecognized-key message is a
+ * as a 422 with an empty `details` map (the unrecognized-key message is a
  * form-level error the field map omits); a JWT for a deleted account yields 404
  * (`NotFoundError`), not 401; and the login endpoint returns one uniform 401
  * message for both unknown-email and wrong-password — are recorded in
@@ -88,7 +88,7 @@ interface AuthSuccessBody {
 /**
  * Minimal shape of the centralized error envelope produced by
  * `middleware/error-handler.ts`. `details` is the field→messages map the
- * `validate` middleware builds from `ZodError.flatten().fieldErrors` for 400
+ * `validate` middleware builds from `ZodError.flatten().fieldErrors` for 422
  * validation failures; `code` carries the typed classification for some errors
  * (e.g. `token_expired`, `token_invalid`, `P2002`).
  */
@@ -228,11 +228,11 @@ describe('Auth routes — POST /api/auth/register, POST /api/auth/login, GET /ap
   });
 
   describe('POST /api/auth/register — Gate 12 validation', () => {
-    it('rejects a missing email with 400 and a field-level details map', async () => {
+    it('rejects a missing email with 422 and a field-level details map', async () => {
       const response = await request(app)
         .post('/api/auth/register')
         .send({ password: STRONG_PASSWORD, displayName: uniqueDisplayName() })
-        .expect(400);
+        .expect(422);
 
       const body = response.body as ErrorResponseBody;
       expect(typeof body.error).toBe('string');
@@ -241,7 +241,7 @@ describe('Auth routes — POST /api/auth/register, POST /api/auth/login, GET /ap
       expect(body.details).toHaveProperty('email');
     });
 
-    it('rejects a malformed email with 400', async () => {
+    it('rejects a malformed email with 422', async () => {
       const response = await request(app)
         .post('/api/auth/register')
         .send({
@@ -249,46 +249,46 @@ describe('Auth routes — POST /api/auth/register, POST /api/auth/login, GET /ap
           password: STRONG_PASSWORD,
           displayName: uniqueDisplayName(),
         })
-        .expect(400);
+        .expect(422);
 
       const body = response.body as ErrorResponseBody;
       expect(body.details).toHaveProperty('email');
     });
 
-    it('rejects a password shorter than MIN_PASSWORD_LENGTH (8) with 400', async () => {
+    it('rejects a password shorter than MIN_PASSWORD_LENGTH (8) with 422', async () => {
       const tooShort = 'a'.repeat(MIN_PASSWORD_LENGTH - 1);
 
       const response = await request(app)
         .post('/api/auth/register')
         .send({ email: uniqueEmail(), password: tooShort, displayName: uniqueDisplayName() })
-        .expect(400);
+        .expect(422);
 
       const body = response.body as ErrorResponseBody;
       expect(body.details).toHaveProperty('password');
     });
 
-    it('rejects a displayName exceeding MAX_DISPLAY_NAME_LENGTH (80) with 400', async () => {
+    it('rejects a displayName exceeding MAX_DISPLAY_NAME_LENGTH (80) with 422', async () => {
       const tooLong = 'a'.repeat(MAX_DISPLAY_NAME_LENGTH + 1);
 
       const response = await request(app)
         .post('/api/auth/register')
         .send({ email: uniqueEmail(), password: STRONG_PASSWORD, displayName: tooLong })
-        .expect(400);
+        .expect(422);
 
       const body = response.body as ErrorResponseBody;
       expect(body.details).toHaveProperty('displayName');
     });
 
-    it('rejects an empty displayName with 400', async () => {
+    it('rejects an empty displayName with 422', async () => {
       await request(app)
         .post('/api/auth/register')
         .send({ email: uniqueEmail(), password: STRONG_PASSWORD, displayName: '' })
-        .expect(400);
+        .expect(422);
     });
 
-    it('rejects unknown fields per the .strict() schema (prototype-pollution defense) with 400', async () => {
+    it('rejects unknown fields per the .strict() schema (prototype-pollution defense) with 422', async () => {
       // `.strict()` rejects unrecognized keys; the violation is a form-level
-      // error, so the field→messages `details` map is empty — only the 400
+      // error, so the field→messages `details` map is empty — only the 422
       // status is contractually firm here.
       await request(app)
         .post('/api/auth/register')
@@ -299,11 +299,11 @@ describe('Auth routes — POST /api/auth/register, POST /api/auth/login, GET /ap
           isAdmin: true,
           passwordHash: 'pwned',
         })
-        .expect(400);
+        .expect(422);
     });
 
-    it('rejects an entirely missing body with 400', async () => {
-      await request(app).post('/api/auth/register').send({}).expect(400);
+    it('rejects an entirely missing body with 422', async () => {
+      await request(app).post('/api/auth/register').send({}).expect(422);
     });
   });
 
@@ -398,29 +398,29 @@ describe('Auth routes — POST /api/auth/register, POST /api/auth/login, GET /ap
   });
 
   describe('POST /api/auth/login — Gate 12 validation', () => {
-    it('rejects a missing email with 400', async () => {
-      await request(app).post('/api/auth/login').send({ password: 'anything' }).expect(400);
+    it('rejects a missing email with 422', async () => {
+      await request(app).post('/api/auth/login').send({ password: 'anything' }).expect(422);
     });
 
-    it('rejects a malformed email with 400', async () => {
+    it('rejects a malformed email with 422', async () => {
       await request(app)
         .post('/api/auth/login')
         .send({ email: 'invalid', password: 'anything' })
-        .expect(400);
+        .expect(422);
     });
 
-    it('rejects an empty password with 400 (loginSchema enforces min(1))', async () => {
+    it('rejects an empty password with 422 (loginSchema enforces min(1))', async () => {
       await request(app)
         .post('/api/auth/login')
         .send({ email: 'user@example.com', password: '' })
-        .expect(400);
+        .expect(422);
     });
 
-    it('rejects unknown fields per the .strict() schema with 400', async () => {
+    it('rejects unknown fields per the .strict() schema with 422', async () => {
       await request(app)
         .post('/api/auth/login')
         .send({ email: 'user@example.com', password: 'anything', remember: true })
-        .expect(400);
+        .expect(422);
     });
   });
 
@@ -596,7 +596,7 @@ describe('Auth routes — POST /api/auth/register, POST /api/auth/login, GET /ap
       await request(app)
         .post('/api/auth/register')
         .send({})
-        .expect(400)
+        .expect(422)
         .expect('Content-Type', /application\/json/);
     });
 

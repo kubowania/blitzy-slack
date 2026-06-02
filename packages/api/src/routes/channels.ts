@@ -32,12 +32,21 @@
 import type {} from 'pino-http';
 
 import { Router, type Request, type Response } from 'express';
+import type { Server } from 'socket.io';
 import { z } from 'zod';
 
 import { createChannelSchema } from '@app/shared/schemas/channel';
 import type { CreateChannelInput } from '@app/shared/schemas/channel';
+import { scopedMessageBodySchema } from '@app/shared/schemas/message';
+import type { ScopedMessageBodyInput } from '@app/shared/schemas/message';
 import type { Channel, ChannelSummary, ChannelWithMembers } from '@app/shared/types/channel';
 import type { MessageWithAuthor } from '@app/shared/types/message';
+import type {
+  ClientToServerEvents,
+  InterServerEvents,
+  ServerToClientEvents,
+  SocketData,
+} from '@app/shared/types/socket-events';
 import { MAX_PAGE_SIZE, PAGE_SIZE } from '@app/shared/constants/limits';
 
 import { requireAuth } from '../middleware/auth.js';
@@ -50,6 +59,22 @@ import {
   listChannelMessages,
   listChannels,
 } from '../services/channels.service.js';
+import { createMessage } from '../services/messages.service.js';
+import { broadcastCreatedMessage } from '../sockets/message-broadcast.js';
+
+/**
+ * Fully-typed Socket.io server alias. Narrowing `req.app.get('io')` to this type
+ * makes the message-broadcast emit checked against the shared event contract.
+ */
+type AppServer = Server<ClientToServerEvents, ServerToClientEvents, InterServerEvents, SocketData>;
+
+/**
+ * Reads the typed Socket.io server from the Express app settings (registered by
+ * the index.ts bootstrap via `app.set('io', io)`).
+ */
+function getIo(req: Request<unknown>): AppServer {
+  return req.app.get('io') as AppServer;
+}
 
 /**
  * Paginated channel message-history payload returned by `GET /:id/messages`:
@@ -61,6 +86,7 @@ import {
 interface ListMessagesResponse {
   messages: MessageWithAuthor[];
   nextCursor: string | null;
+  hasMore: boolean;
 }
 
 /** Validates the `:id` path parameter as a Prisma cuid; rejects extra params. */
@@ -216,5 +242,48 @@ router.get(
     const result = await listChannelMessages({ channelId, userId, cursor, limit });
 
     res.status(200).json(result);
+  },
+);
+
+router.post(
+  '/:id/messages',
+  requireAuth,
+  validate({ params: channelIdParamsSchema, body: scopedMessageBodySchema }),
+  async (
+    req: Request<{ id: string }, MessageWithAuthor, ScopedMessageBodyInput>,
+    res: Response<MessageWithAuthor>,
+  ): Promise<void> => {
+    const authorId = req.user!.id;
+    const channelId = req.params.id;
+
+    // The container is the channel named in the URL path; the body carries only
+    // content + optional thread parentId + optional fileId. The service enforces
+    // channel membership, thread parentage, and file ownership.
+    const message = await createMessage({
+      authorId,
+      content: req.body.content,
+      channelId,
+      parentId: req.body.parentId,
+      fileId: req.body.fileId,
+    });
+
+    // Single producer of message:new (+ message:updated for thread replies),
+    // shared with POST /api/messages and the socket message handler.
+    broadcastCreatedMessage(getIo(req), message);
+
+    req.log.info(
+      {
+        component: 'channels.route',
+        event: 'message:send',
+        userId: authorId,
+        channelId,
+        messageId: message.id,
+        parentId: message.parentId,
+        hasFile: message.file !== null,
+      },
+      'channel message sent',
+    );
+
+    res.status(201).json(message);
   },
 );

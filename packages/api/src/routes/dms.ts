@@ -30,6 +30,8 @@ import { z } from 'zod';
 
 import { startDmSchema } from '@app/shared/schemas/dm';
 import type { StartDmInput } from '@app/shared/schemas/dm';
+import { scopedMessageBodySchema } from '@app/shared/schemas/message';
+import type { ScopedMessageBodyInput } from '@app/shared/schemas/message';
 import type { DMWithParticipants } from '@app/shared/types/dm';
 import type { MessageWithAuthor } from '@app/shared/types/message';
 import type {
@@ -43,6 +45,8 @@ import { MAX_PAGE_SIZE, PAGE_SIZE } from '@app/shared/constants/limits';
 import { requireAuth } from '../middleware/auth.js';
 import { validate } from '../middleware/validate.js';
 import { listDms, startDm, listDmMessages } from '../services/dms.service.js';
+import { createMessage } from '../services/messages.service.js';
+import { broadcastCreatedMessage } from '../sockets/message-broadcast.js';
 import { dmRoom, userRoom } from '../sockets/rooms.js';
 
 /**
@@ -61,6 +65,7 @@ type AppServer = Server<ClientToServerEvents, ServerToClientEvents, InterServerE
 interface ListDmMessagesResponse {
   messages: MessageWithAuthor[];
   nextCursor: string | null;
+  hasMore: boolean;
 }
 
 /** Validates the `:id` path parameter as a Prisma cuid; rejects extra params. */
@@ -168,5 +173,49 @@ router.get(
     const result = await listDmMessages({ dmId, userId, cursor, limit });
 
     res.status(200).json(result);
+  },
+);
+
+router.post(
+  '/:id/messages',
+  requireAuth,
+  validate({ params: dmIdParamsSchema, body: scopedMessageBodySchema }),
+  async (
+    req: Request<{ id: string }, MessageWithAuthor, ScopedMessageBodyInput>,
+    res: Response<MessageWithAuthor>,
+  ): Promise<void> => {
+    const authorId = req.user!.id;
+    const dmId = req.params.id;
+
+    // The container is the DM named in the URL path; the body carries only
+    // content + optional thread parentId + optional fileId. The service enforces
+    // DM participation, thread parentage, and file ownership.
+    const message = await createMessage({
+      authorId,
+      content: req.body.content,
+      dmId,
+      parentId: req.body.parentId,
+      fileId: req.body.fileId,
+    });
+
+    // Single producer of message:new (+ message:updated for thread replies),
+    // shared with POST /api/messages and the socket message handler.
+    const io = req.app.get('io') as AppServer;
+    broadcastCreatedMessage(io, message);
+
+    req.log.info(
+      {
+        component: 'dms.route',
+        event: 'message:send',
+        userId: authorId,
+        dmId,
+        messageId: message.id,
+        parentId: message.parentId,
+        hasFile: message.file !== null,
+      },
+      'dm message sent',
+    );
+
+    res.status(201).json(message);
   },
 );

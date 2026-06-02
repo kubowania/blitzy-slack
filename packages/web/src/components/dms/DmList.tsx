@@ -1,7 +1,7 @@
 import * as React from 'react';
 import { useLocation } from 'react-router';
 import { useQueryClient } from '@tanstack/react-query';
-import { Plus } from 'lucide-react';
+import { ChevronDown, Plus } from 'lucide-react';
 
 import { DmListItem } from '@/components/dms/DmListItem';
 import { StartDmDialog } from '@/components/dms/StartDmDialog';
@@ -46,6 +46,8 @@ export function DmList(): React.JSX.Element {
   const queryClient = useQueryClient();
 
   const [isDialogOpen, setIsDialogOpen] = React.useState(false);
+  // Whether the section's rows are collapsed (hidden) behind its heading.
+  const [collapsed, setCollapsed] = React.useState<boolean>(false);
   // Ref to the "+" trigger so the dialog can restore focus to it on close.
   const dmTriggerRef = React.useRef<HTMLButtonElement | null>(null);
 
@@ -84,13 +86,21 @@ export function DmList(): React.JSX.Element {
       className="flex flex-col gap-1 px-2 py-2"
     >
       <header className="flex items-center justify-between px-2">
-        <h2
-          className={cn(
-            'text-xs font-semibold uppercase tracking-wide',
-            'text-sidebar-foreground/70',
-          )}
-        >
-          Direct Messages
+        <h2 className="min-w-0">
+          <button
+            type="button"
+            aria-expanded={!collapsed}
+            onClick={() => {
+              setCollapsed((value) => !value);
+            }}
+            className="flex w-full items-center gap-1 text-xs font-semibold uppercase tracking-wide text-sidebar-foreground/70 hover:text-sidebar-foreground"
+          >
+            <ChevronDown
+              aria-hidden="true"
+              className={cn('size-3 shrink-0 transition-transform', collapsed && '-rotate-90')}
+            />
+            <span>Direct Messages</span>
+          </button>
         </h2>
         <Tooltip>
           <TooltipTrigger asChild>
@@ -111,40 +121,44 @@ export function DmList(): React.JSX.Element {
       </header>
 
       <div className="flex flex-col gap-0.5">
-        {isLoading ? (
+        {collapsed ? null : (
           <>
-            {/* Visually-hidden live status so assistive tech announces the
+            {isLoading ? (
+              <>
+                {/* Visually-hidden live status so assistive tech announces the
                 loading state the skeleton rows convey visually (the skeletons
                 themselves are decorative). Paired with `aria-busy` on the
                 section above. */}
-            <span role="status" className="sr-only">
-              Loading direct messages…
-            </span>
-            <DmListSkeletonRow />
-            <DmListSkeletonRow />
-            <DmListSkeletonRow />
+                <span role="status" className="sr-only">
+                  Loading direct messages…
+                </span>
+                <DmListSkeletonRow />
+                <DmListSkeletonRow />
+                <DmListSkeletonRow />
+              </>
+            ) : null}
+
+            {isEmpty ? (
+              <Empty className="border-0 px-2 py-3">
+                <EmptyTitle className="text-sm">No direct messages</EmptyTitle>
+                <EmptyDescription className="text-xs">
+                  Start a DM to chat with teammates.
+                </EmptyDescription>
+              </Empty>
+            ) : null}
+
+            {!isLoading && dms.length > 0
+              ? dms.map((dm) => (
+                  <DmListItem
+                    key={dm.id}
+                    dm={dm}
+                    currentUserId={currentUserId}
+                    isActive={dm.id === activeDmId}
+                  />
+                ))
+              : null}
           </>
-        ) : null}
-
-        {isEmpty ? (
-          <Empty className="border-0 px-2 py-3">
-            <EmptyTitle className="text-sm">No direct messages</EmptyTitle>
-            <EmptyDescription className="text-xs">
-              Start a DM to chat with teammates.
-            </EmptyDescription>
-          </Empty>
-        ) : null}
-
-        {!isLoading && dms.length > 0
-          ? dms.map((dm) => (
-              <DmListItem
-                key={dm.id}
-                dm={dm}
-                currentUserId={currentUserId}
-                isActive={dm.id === activeDmId}
-              />
-            ))
-          : null}
+        )}
       </div>
 
       <StartDmDialog open={isDialogOpen} onOpenChange={setIsDialogOpen} triggerRef={dmTriggerRef} />

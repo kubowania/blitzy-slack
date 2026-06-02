@@ -38,7 +38,7 @@ import {
   ValidationError,
 } from '../../middleware/errors.js';
 import { logger } from '../../config/logger.js';
-import { channelRoom, dmRoom, threadRoom } from '../rooms.js';
+import { broadcastCreatedMessage } from '../message-broadcast.js';
 import { sendMessageSchema } from '@app/shared/schemas/message';
 import { ERROR, MESSAGE_NEW, MESSAGE_SEND } from '@app/shared/constants/events';
 import type {
@@ -125,52 +125,6 @@ function logUnhandledRejection(socket: AppSocket, err: unknown): void {
 }
 
 /**
- * Resolves the set of Socket.io room keys that must receive the `message:new`
- * broadcast for a hydrated message.
- *
- * Routing rules (channelId/dmId are mutually exclusive — enforced by the schema
- * and by the service):
- *
- *   - Thread reply (`parentId !== null`): broadcast to BOTH the thread room
- *     (feeds an open thread panel) AND the parent's channel or DM room (feeds
- *     sidebar reply-count badges and the parent's "X replies" indicator).
- *   - Channel message (`channelId !== null`): the channel room only.
- *   - DM message (`dmId !== null`): the DM room only.
- *
- * Returns an empty array only for a routing-less (corrupt) message, which the
- * schema and service guarantees should make unreachable.
- *
- * @param message - The hydrated message returned by the service (authoritative
- *   `channelId` / `dmId` / `parentId` values).
- * @returns The room keys to broadcast to (1 or 2 entries; `[]` if unroutable).
- */
-function resolveBroadcastRooms(message: MessageWithAuthor): string[] {
-  const rooms: string[] = [];
-
-  if (message.parentId !== null) {
-    rooms.push(threadRoom(message.parentId));
-    if (message.channelId !== null) {
-      rooms.push(channelRoom(message.channelId));
-    } else if (message.dmId !== null) {
-      rooms.push(dmRoom(message.dmId));
-    }
-    return rooms;
-  }
-
-  if (message.channelId !== null) {
-    rooms.push(channelRoom(message.channelId));
-    return rooms;
-  }
-
-  if (message.dmId !== null) {
-    rooms.push(dmRoom(message.dmId));
-    return rooms;
-  }
-
-  return rooms;
-}
-
-/**
  * Validates, persists, broadcasts, and acknowledges a single `message:send`.
  *
  * Flow:
@@ -178,9 +132,10 @@ function resolveBroadcastRooms(message: MessageWithAuthor): string[] {
  *   2. Persist via `createMessage`, which enforces the channel/DM XOR invariant,
  *      channel-membership / DM-participation ACL, thread parentage, and
  *      file-attachment ownership, returning a fully-hydrated MessageWithAuthor.
- *   3. Resolve the broadcast room(s) from the AUTHORITATIVE service result.
- *   4. Emit `message:new` (identical payload) to every resolved room.
- *   5. Acknowledge the originating socket with the hydrated message.
+ *   3. Broadcast via the shared `broadcastCreatedMessage` helper, which emits
+ *      `message:new` to the destination room(s) and the `message:updated` parent
+ *      reconcile for thread replies — identical to the REST write paths.
+ *   4. Acknowledge the originating socket with the hydrated message.
  *
  * The ack is invoked exactly once on every path — here on success, or via
  * {@link handleError} on failure.
@@ -214,23 +169,10 @@ async function handleMessageSend(
       fileId: validated.fileId,
     });
 
-    const rooms = resolveBroadcastRooms(message);
-    if (rooms.length === 0) {
-      logger.warn(
-        {
-          component: 'message.handler',
-          event: MESSAGE_SEND,
-          socketId: socket.id,
-          userId,
-          messageId: message.id,
-        },
-        'message send: hydrated message has no routing fields',
-      );
-    } else {
-      for (const room of rooms) {
-        io.to(room).emit(MESSAGE_NEW, message);
-      }
-    }
+    // Single producer of message:new (dual for thread replies) plus the
+    // message:updated parent reconcile, shared with the REST write paths so a
+    // socket-originated and a REST-originated message emit an identical contract.
+    broadcastCreatedMessage(io, message);
 
     safeAck(message);
 
@@ -244,7 +186,6 @@ async function handleMessageSend(
         channelId: message.channelId,
         dmId: message.dmId,
         parentId: message.parentId,
-        rooms,
         latency: Date.now() - start,
       },
       'message sent',

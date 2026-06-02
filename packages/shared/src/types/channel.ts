@@ -72,9 +72,10 @@ export interface ChannelMember {
  * and the channel-detail view in the web UI. Includes the full member list
  * (with hydrated user data) and the precomputed member count.
  *
- * `memberCount` is included DISTINCT from `members.length` because in
- * future iterations the API may return only the first N members and then
- * page; `memberCount` always reflects the total.
+ * `memberCount` is a precomputed field DISTINCT from `members.length` and
+ * always reflects the total member count. Rationale (forward-compatibility
+ * with paged member lists) is recorded in /docs/decision-log.md per the
+ * Explainability rule (AAP §0.8.3), not in these comments.
  */
 export interface ChannelWithMembers extends Channel {
   /** Channel members with hydrated user shapes. */

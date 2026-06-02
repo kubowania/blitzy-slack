@@ -69,6 +69,10 @@ export function DmListItem({
       size="sm"
       className={cn(
         'rounded-md text-sidebar-foreground hover:bg-sidebar-hover hover:text-sidebar-hover-foreground',
+        // Comfortable 44px touch target on phones (where this row lives in the
+        // off-canvas drawer); reverts to Slack's dense desktop height at `md`+
+        // (A11Y-001 vs Rule 1 density — see /docs/decision-log.md).
+        'min-h-11 md:min-h-0',
         isActive && 'bg-sidebar-accent text-sidebar-accent-foreground',
         className,
       )}

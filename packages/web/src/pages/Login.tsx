@@ -4,6 +4,7 @@ import { Link, useLocation, useNavigate } from 'react-router';
 
 import { loginSchema, type LoginInput } from '@app/shared/schemas/auth';
 
+import AuthLayout from '@/components/layout/AuthLayout';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import {
@@ -82,9 +83,9 @@ export default function Login() {
   const isSubmitting = form.formState.isSubmitting;
 
   return (
-    <div className="flex min-h-screen items-center justify-center bg-background p-6">
+    <AuthLayout>
       <Card className="w-full max-w-md">
-        <CardHeader>
+        <CardHeader className="text-center">
           <CardTitle className="text-2xl">Sign in to Blitzy Slack</CardTitle>
           <CardDescription>
             Welcome back. Enter your email and password to continue.
@@ -144,7 +145,11 @@ export default function Login() {
                 </p>
               ) : null}
 
-              <Button type="submit" className="w-full" disabled={isSubmitting}>
+              <Button
+                type="submit"
+                className="w-full bg-sidebar-bg text-sidebar-foreground hover:bg-sidebar-hover"
+                disabled={isSubmitting}
+              >
                 {isSubmitting ? (
                   <>
                     <Spinner className="mr-2 size-4" />
@@ -168,6 +173,6 @@ export default function Login() {
           </p>
         </CardContent>
       </Card>
-    </div>
+    </AuthLayout>
   );
 }

@@ -15,7 +15,7 @@ export interface AuthenticatedUser {
 
 /**
  * Module augmentation: extend Express's core Request type with an
- * optional `user` field. Optional because not every route is
+ * optional `user` field. It is optional: not every route is
  * authenticated (e.g., /api/auth/login, /api/auth/register,
  * /api/health). Routes that DO use `requireAuth` are guaranteed
  * `req.user !== undefined` at the handler's entry — within authenticated

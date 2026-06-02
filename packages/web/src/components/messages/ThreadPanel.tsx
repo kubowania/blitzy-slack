@@ -240,8 +240,8 @@ interface ThreadBodyProps {
 
 /**
  * ThreadBody — the scrollable region holding the parent message, a "X replies"
- * divider, and the reply list. Kept internal because it has no use outside the
- * panel and shares the parent's data shape.
+ * divider, and the reply list. Internal to this module; it has no use outside
+ * the panel and shares the parent's data shape.
  */
 function ThreadBody({ thread, parentMessageId }: ThreadBodyProps): React.JSX.Element {
   const replyCount = thread.replies.length;

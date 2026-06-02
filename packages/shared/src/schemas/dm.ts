@@ -22,7 +22,9 @@ import { z } from 'zod';
  */
 export const startDmSchema = z
   .object({
-    targetUserId: z.string().cuid(),
+    targetUserId: z
+      .string({ required_error: 'Select a user to message' })
+      .cuid('Select a valid user to message'),
   })
   .strict();
 

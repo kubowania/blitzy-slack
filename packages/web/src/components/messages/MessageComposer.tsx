@@ -17,13 +17,14 @@
  *
  * Form state is owned by react-hook-form with `zodResolver(sendMessageSchema)`,
  * so the client enforces exactly the rules the API validates (Gate 12). On
- * submit the composer POSTs to the single `/api/messages` endpoint with the
- * scope (channelId / dmId / parentId) carried in the request body; the server
- * then emits a `message:new` Socket.io event that the message-list cache
- * subscriber applies, so the new message appears in the timeline without a
- * manual cache write (Rule 2 — real-time fan-out, never polling). Typing
- * notifications are emitted through {@link useTyping} while composing and
- * stopped on submit.
+ * submit the composer POSTs to the PATH-SCOPED write endpoint —
+ * `POST /api/channels/:id/messages` for a channel or `POST /api/dms/:id/messages`
+ * for a DM — with the container id in the URL path and only content (+ optional
+ * thread parentId / fileId) in the body; the server then emits a `message:new`
+ * Socket.io event that the message-list cache subscriber applies, so the new
+ * message appears in the timeline without a manual cache write (Rule 2 —
+ * real-time fan-out, never polling). Typing notifications are emitted through
+ * {@link useTyping} while composing and stopped on submit.
  *
  * Design rationale for this component is recorded in /docs/decision-log.md, the
  * single source of truth for such decisions, not in these comments.
@@ -133,12 +134,30 @@ export function MessageComposer({
 
   const sendMutation = useMutation<MessageWithAuthor, ApiError, SendMessageInput>({
     mutationFn: async (payload: SendMessageInput): Promise<MessageWithAuthor> => {
-      // Single canonical write endpoint. The API exposes only POST /api/messages
-      // (there are no /api/channels/:id/messages, /api/dms/:id/messages, or
-      // /api/messages/:id/replies write routes). The server derives the scope
-      // from the BODY's channelId / dmId / parentId, which the form's
-      // defaultValues already populate, so the validated payload is sent verbatim.
-      return apiClient.post<MessageWithAuthor>('/api/messages', payload);
+      // Path-scoped write endpoints (CHAN-002 / DM-001): the container id lives in
+      // the URL PATH and the body carries only content plus an optional thread
+      // parentId / fileId. The scoped body schema is `.strict()`, so channelId /
+      // dmId must NOT be sent in the body — they are stripped here and supplied
+      // through the path. `JSON.stringify` drops the `undefined` parentId / fileId,
+      // so an omitted optional never reaches the strict schema as a stray key.
+      const body = {
+        content: payload.content,
+        parentId: payload.parentId,
+        fileId: payload.fileId,
+      };
+      if (payload.channelId !== undefined) {
+        return apiClient.post<MessageWithAuthor>(
+          `/api/channels/${payload.channelId}/messages`,
+          body,
+        );
+      }
+      if (payload.dmId !== undefined) {
+        return apiClient.post<MessageWithAuthor>(`/api/dms/${payload.dmId}/messages`, body);
+      }
+      // The form's Zod XOR refinement guarantees exactly one of channelId / dmId
+      // is set, so this is unreachable in practice; throw rather than silently
+      // posting to an undefined scope.
+      throw new Error('MessageComposer: a message must target a channel or a DM');
     },
     onError: (error: ApiError) => {
       toast.error('Failed to send message', { description: error.message });
@@ -294,7 +313,7 @@ export function MessageComposer({
                     type="button"
                     variant="ghost"
                     size="icon"
-                    className="size-7"
+                    className="size-11 md:size-7"
                     disabled={sendMutation.isPending}
                     aria-label="Add emoji"
                   >
@@ -311,6 +330,7 @@ export function MessageComposer({
               <FileUploadButton
                 onFileUploaded={handleFileUploaded}
                 disabled={attachedFile !== null || sendMutation.isPending}
+                className="size-11 md:size-9"
               />
             </div>
 
@@ -320,7 +340,7 @@ export function MessageComposer({
                 <Button
                   type="submit"
                   size="icon"
-                  className="size-8"
+                  className="size-11 md:size-8"
                   disabled={isSubmitDisabled}
                   aria-label="Send message"
                 >

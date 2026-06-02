@@ -10,7 +10,7 @@
  *                             results surface groups hits with shadcn Tabs (Messages /
  *                             Channels / Files).
  *   5. Edge Cases           — an empty query fires no request, an over-long query is
- *                             rejected with 400, and special characters never 500.
+ *                             rejected with 422, and special characters never 500.
  *
  * UI flows drive the browser through the `page` fixture; assertions that must be
  * deterministic regardless of the rendered layout (ACL isolation, request
@@ -393,7 +393,7 @@ test.describe('Full-Text Search', () => {
         return provisionedUser;
       });
 
-      await test.step('Assert an over-long query is rejected with HTTP 400', async () => {
+      await test.step('Assert an over-long query is rejected with HTTP 422', async () => {
         const apiUrl = resolveApiUrl();
         const tooLong = 'a'.repeat(MAX_SEARCH_QUERY_LENGTH + 1);
         const response = await request.get(
@@ -402,7 +402,7 @@ test.describe('Full-Text Search', () => {
             headers: { Authorization: `Bearer ${user.token}` },
           },
         );
-        expect(response.status()).toBe(400);
+        expect(response.status()).toBe(422);
       });
     });
 
@@ -416,13 +416,15 @@ test.describe('Full-Text Search', () => {
         const apiUrl = resolveApiUrl();
         // Characters that would break a naive to_tsquery. The service must escape
         // them (plainto_tsquery / websearch_to_tsquery) and never return a 500.
+        // A query the schema rejects (e.g. an SQLi signature) surfaces as 422
+        // Unprocessable Entity, never 400 — a GET has no body to fail body-parsing.
         const specialQueries = ['"quoted"', '(parens)', 'a|b', 'a&b', 'a:b', "a'b", 'back\\slash'];
         for (const query of specialQueries) {
           const response = await request.get(
             `${apiUrl}/api/search?q=${encodeURIComponent(query)}`,
             { headers: { Authorization: `Bearer ${user.token}` } },
           );
-          expect([200, 400]).toContain(response.status());
+          expect([200, 422]).toContain(response.status());
         }
       });
     });

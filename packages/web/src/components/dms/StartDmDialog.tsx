@@ -31,9 +31,9 @@ export interface StartDmDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   /**
-   * Ref to the control that opens the dialog. Because the dialog is opened
-   * programmatically (not via a Radix `DialogTrigger`), focus is explicitly
-   * restored to this element on close so keyboard users return to the trigger
+   * Ref to the control that opens the dialog. The dialog is opened
+   * programmatically (not via a Radix `DialogTrigger`), so focus is explicitly
+   * restored to this element on close, returning keyboard users to the trigger
    * (WAI-ARIA dialog pattern) instead of being dropped to the document body.
    */
   triggerRef?: React.RefObject<HTMLButtonElement | null>;

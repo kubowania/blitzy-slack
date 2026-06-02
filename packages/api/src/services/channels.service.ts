@@ -105,6 +105,8 @@ export interface ListMessagesResult {
   messages: MessageWithAuthor[];
   /** Opaque cursor for the next (older) page, or `null` when none remain. */
   nextCursor: string | null;
+  /** Whether at least one older page of messages exists beyond this page. */
+  hasMore: boolean;
 }
 
 /**
@@ -433,10 +435,13 @@ export async function createChannel(input: CreateChannelInputWithCreator): Promi
  * Add the caller as a `member` of a PUBLIC channel.
  *
  * Private channels are not self-joinable in the PoC (there is no invite flow);
- * an attempt raises `ForbiddenError`. The join is idempotent: a duplicate
- * membership (the caller is already a member) raises Prisma's `P2002` on the
- * `(channelId, userId)` unique constraint, which is caught here and resolved to
- * the already-joined channel DTO instead of surfacing as a 409.
+ * an attempt raises `ForbiddenError`. The join is idempotent: membership is
+ * written with an `upsert` on the `(channelId, userId)` unique constraint, so a
+ * caller who is already a member resolves to the already-joined channel DTO
+ * with no error and an empty `update` (their existing role — e.g. `owner` — is
+ * preserved, never downgraded to `member`). The upsert is atomic, so an
+ * idempotent re-join never trips the unique constraint and never emits a Prisma
+ * `P2002` error log.
  *
  * @param input - the target channel id and the authenticated caller id.
  * @returns the joined channel as a `Channel` DTO.
@@ -456,22 +461,16 @@ export async function joinChannel(input: JoinLeaveInput): Promise<Channel> {
     throw new ForbiddenError('Private channels cannot be joined directly');
   }
 
-  try {
-    await prisma.channelMember.create({
-      data: {
-        channelId,
-        userId,
-        role: 'member',
-      },
-    });
-    logger.info({ channelId, userId }, 'channels.join.success');
-  } catch (err) {
-    if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002') {
-      logger.debug({ channelId, userId }, 'channels.join.idempotent');
-      return toChannelDto(channel);
-    }
-    throw err;
-  }
+  await prisma.channelMember.upsert({
+    where: { channelId_userId: { channelId, userId } },
+    create: {
+      channelId,
+      userId,
+      role: 'member',
+    },
+    update: {},
+  });
+  logger.info({ channelId, userId }, 'channels.join.success');
 
   return toChannelDto(channel);
 }
@@ -652,5 +651,5 @@ export async function listChannelMessages(input: ListMessagesInput): Promise<Lis
     'channels.listChannelMessages.success',
   );
 
-  return { messages, nextCursor };
+  return { messages, nextCursor, hasMore };
 }

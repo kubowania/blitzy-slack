@@ -13,7 +13,11 @@
  *      older page.
  *   3. Real-time updates — Socket.io subscriptions mutate the TanStack cache
  *      via `setQueryData` so the timeline re-renders without an HTTP refetch:
- *        - `message:new` prepends in-scope top-level messages into the first page.
+ *        - `message:new` prepends in-scope top-level messages into the first page
+ *          and optimistically bumps a parent's `replyCount` for thread replies.
+ *        - `message:updated` replaces an in-scope message by id with the
+ *          server's re-hydrated authoritative copy (e.g. the corrected
+ *          `replyCount` after a thread reply).
  *        - `reaction:added` / `reaction:removed` patch the `reactions` array of
  *          the affected message wherever it lives across the loaded pages.
  *
@@ -46,7 +50,10 @@ export interface UseMessagesOptions {
 /**
  * One page of the message timeline as returned by the API. Messages are ordered
  * newest-first within a page; `nextCursor` points at the next OLDER page and is
- * `null` once the oldest message has been reached.
+ * `null` once the oldest message has been reached. `hasMore` is the explicit
+ * server-computed flag (true exactly when a further older page exists) and
+ * mirrors `nextCursor !== null`; the infinite-scroll loader consumes it as the
+ * authoritative "more pages" signal (PAG-001 / covenant #182).
  *
  * Exported so other modules that patch the same cache (e.g. the thread panel's
  * reply fan-out) share the exact page shape.
@@ -54,6 +61,7 @@ export interface UseMessagesOptions {
 export interface MessagesPage {
   messages: MessageWithAuthor[];
   nextCursor: string | null;
+  hasMore: boolean;
 }
 
 /**
@@ -123,13 +131,21 @@ export interface UseMessagesResult {
  * re-delivered event (e.g. after a socket reconnect) cannot double-count.
  * Messages for other conversations are ignored.
  *
+ * The `message:updated` subscription replaces a message already present in the
+ * timeline with the server's re-hydrated authoritative copy, matched by id. The
+ * server emits it immediately after `message:new` for a thread reply (carrying
+ * the parent with its corrected `replyCount`), so it lands after — and
+ * reconciles — the optimistic increment above; the replace is idempotent, so a
+ * re-delivered event is harmless. An update for a message not loaded in this
+ * timeline is a no-op.
+ *
  * The `reaction:added` / `reaction:removed` subscriptions patch the `reactions`
  * array of the affected message in place, searching every loaded page by id.
- * Because the reaction events carry only a `messageId` (no scope), each mounted
+ * The reaction events carry only a `messageId` (no scope), so each mounted
  * `useMessages` instance updates its cache ONLY when it actually contains the
  * message; events for messages in other conversations (or thread replies, which
  * never appear in this timeline) are no-ops. `hasCurrentUser` is recomputed
- * against the local viewer's id rather than trusting the broadcast payload.
+ * against the local viewer's id, not the broadcast payload.
  *
  * @param options - The channel or DM whose timeline to load.
  * @returns The flattened messages, pagination state, error, and sentinel ref.
@@ -169,7 +185,10 @@ export function useMessages(options: UseMessagesOptions): UseMessagesResult {
           : `/api/dms/${encodeURIComponent(dmId ?? '')}/messages?${params.toString()}`;
       return await apiClient.get<MessagesPage>(path);
     },
-    getNextPageParam: (lastPage): string | null => lastPage.nextCursor,
+    // Consume the server's explicit `hasMore` flag as the authoritative
+    // stop signal; `nextCursor` is non-null exactly when `hasMore` is true, so
+    // gating on `hasMore` keeps the page param and the boolean in lock-step.
+    getNextPageParam: (lastPage): string | null => (lastPage.hasMore ? lastPage.nextCursor : null),
   });
 
   const messages = (query.data?.pages ?? []).flatMap((page) => page.messages);
@@ -247,6 +266,38 @@ export function useMessages(options: UseMessagesOptions): UseMessagesResult {
             messages: page.messages.map((m) =>
               m.id === parentId ? { ...m, replyCount: m.replyCount + 1 } : m,
             ),
+          };
+        });
+        if (!didChange) {
+          return current;
+        }
+        return { ...current, pages };
+      },
+    );
+  });
+
+  // Authoritative reconciliation: replace a loaded message by id with the
+  // server's re-hydrated copy. For a thread reply the server emits this right
+  // after `message:new`, carrying the parent with its corrected `replyCount`,
+  // so it lands after and overwrites the optimistic increment above. Searching
+  // by id (no scope check) means an update for a message in another
+  // conversation simply finds no match and leaves the cache untouched.
+  useSocketEvent('message:updated', (updated): void => {
+    queryClient.setQueryData<InfiniteData<MessagesPage>>(
+      queryKey,
+      (current): InfiniteData<MessagesPage> | undefined => {
+        if (current === undefined) {
+          return current;
+        }
+        let didChange = false;
+        const pages = current.pages.map((page): MessagesPage => {
+          if (!page.messages.some((m) => m.id === updated.id)) {
+            return page;
+          }
+          didChange = true;
+          return {
+            ...page,
+            messages: page.messages.map((m) => (m.id === updated.id ? updated : m)),
           };
         });
         if (!didChange) {

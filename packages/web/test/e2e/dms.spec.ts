@@ -13,7 +13,7 @@
  *   4. Persistence & Reload — a DM survives navigating away and back, and its
  *                             history rehydrates after a full page refresh.
  *   5. Edge Cases           — POST /api/dms rejects a non-existent participant
- *                             (404/400) and a malformed, non-CUID id (400, Zod).
+ *                             (404/400) and a malformed, non-CUID id (422, Zod).
  *
  * UI flows drive the browser through the `page` (and `browser`) fixtures; the
  * deterministic request-validation assertions call POST /api/dms directly.
@@ -297,10 +297,11 @@ test.describe('Direct Messages', () => {
     test('rejects starting a DM with malformed user id (Zod validation)', async () => {
       const user = await test.step('Register a user', () => registerUserViaApi());
 
-      await test.step('POST /api/dms with a non-CUID id is rejected (400, Zod)', async () => {
+      await test.step('POST /api/dms with a non-CUID id is rejected (422, Zod)', async () => {
         const apiUrl = resolveApiUrl();
         // `startDmSchema` validates `targetUserId` as a CUID, so a malformed
-        // value must be rejected with 400 before any DB lookup.
+        // value must be rejected with 422 (Unprocessable Entity) before any DB
+        // lookup.
         const response = await fetch(`${apiUrl}/api/dms`, {
           method: 'POST',
           headers: {
@@ -310,7 +311,7 @@ test.describe('Direct Messages', () => {
           body: JSON.stringify({ targetUserId: 'not-a-cuid' }),
         });
 
-        expect(response.status).toBe(400);
+        expect(response.status).toBe(422);
       });
     });
   });

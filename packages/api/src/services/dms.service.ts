@@ -82,6 +82,8 @@ export interface ListDmMessagesResult {
   messages: MessageWithAuthor[];
   /** Opaque cursor for the next (older) page, or `null` when exhausted. */
   nextCursor: string | null;
+  /** Whether at least one older page of messages exists beyond this page. */
+  hasMore: boolean;
 }
 
 /**
@@ -545,5 +547,5 @@ export async function listDmMessages(input: ListDmMessagesInput): Promise<ListDm
 
   logger.debug({ dmId, userId, count: messages.length, hasMore }, 'dms.listMessages.success');
 
-  return { messages, nextCursor };
+  return { messages, nextCursor, hasMore };
 }

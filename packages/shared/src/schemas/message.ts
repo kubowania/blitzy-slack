@@ -33,7 +33,11 @@ import {
  */
 export const sendMessageSchema = z
   .object({
-    content: z.string().trim().min(1).max(MAX_MESSAGE_LENGTH),
+    content: z
+      .string()
+      .trim()
+      .min(1, 'Message cannot be empty')
+      .max(MAX_MESSAGE_LENGTH, `Message must be at most ${MAX_MESSAGE_LENGTH} characters`),
     channelId: z.string().cuid().optional(),
     dmId: z.string().cuid().optional(),
     parentId: z.string().cuid().optional(),
@@ -56,6 +60,37 @@ export const sendMessageSchema = z
  * Inferred TypeScript type for the validated send-message payload.
  */
 export type SendMessageInput = z.infer<typeof sendMessageSchema>;
+
+/**
+ * Validates the request BODY for the path-scoped message-create routes
+ * `POST /api/channels/:id/messages` and `POST /api/dms/:id/messages`.
+ *
+ * Unlike {@link sendMessageSchema}, the container is identified by the URL path
+ * parameter (`:id`), so this body carries NEITHER `channelId` NOR `dmId` — the
+ * route handler derives the container id from `req.params.id` and passes it to
+ * the message service. The body therefore contains only the message `content`
+ * plus the optional thread `parentId` and `fileId` attachment reference.
+ *
+ * `.strict()` rejects unknown keys (including a stray `channelId` / `dmId` in
+ * the body) so a caller cannot post into a different container than the URL
+ * names.
+ */
+export const scopedMessageBodySchema = z
+  .object({
+    content: z
+      .string()
+      .trim()
+      .min(1, 'Message cannot be empty')
+      .max(MAX_MESSAGE_LENGTH, `Message must be at most ${MAX_MESSAGE_LENGTH} characters`),
+    parentId: z.string().cuid().optional(),
+    fileId: z.string().cuid().optional(),
+  })
+  .strict();
+
+/**
+ * Inferred TypeScript type for the validated path-scoped message body.
+ */
+export type ScopedMessageBodyInput = z.infer<typeof scopedMessageBodySchema>;
 
 /**
  * Validates the scope of a `typing:start` / `typing:stop` realtime event.
@@ -121,9 +156,9 @@ function isStandardEmoji(value: string): boolean {
  * removing (`DELETE /api/messages/:id/reactions/:emoji`) a reaction on a
  * message.
  *
- * The shape is unified across add and remove because the wire data is
- * identical: identify the message (`messageId`) and the emoji (`emoji`).
- * The HTTP method discriminates add vs remove.
+ * One schema serves both add and remove: the wire data is identical — identify
+ * the message (`messageId`) and the emoji (`emoji`) — and the HTTP method
+ * discriminates add vs remove.
  *
  * `emoji` must be a standard Unicode emoji: every code point belongs to the
  * emoji set (pictographs, skin-tone modifiers, variation selector-16, the
@@ -150,6 +185,45 @@ export const reactionSchema = z
 export type ReactionInput = z.infer<typeof reactionSchema>;
 
 /**
+ * High-precision SQL-injection signatures rejected by {@link searchQuerySchema}.
+ *
+ * Each pattern targets a canonical injection form (line/block comments,
+ * tautology probes with literal operands, stacked statements, UNION-based
+ * extraction) and is scoped narrowly against standard chat-search prose. A match
+ * causes {@link searchQuerySchema} to reject the input at the contract boundary
+ * (HTTP 422). Rationale and trade-offs (this is a defense-in-depth input layer
+ * atop the parameterized `tsvector` lookup, and the narrow-vs-broad signature
+ * balance) are recorded in /docs/decision-log.md per the Explainability rule
+ * (AAP §0.8.3), not in these comments.
+ */
+const SQL_INJECTION_PATTERNS: readonly RegExp[] = [
+  // SQL line comment ("' OR 1=1 --") and block-comment delimiters ("/* */").
+  /--/,
+  /\/\*/,
+  /\*\//,
+  // Tautology probes: OR/AND <literal> = <literal>, where each operand is a
+  // number or a quoted string literal (e.g. "OR 1=1", "OR 'a'='a'"). Requiring
+  // literal operands means ordinary prose ("rock and roll = music"), whose
+  // operands are barewords, does not match.
+  /\b(?:or|and)\b\s+(?:\d+|'[^']*'|"[^"]*")\s*=\s*(?:\d+|'[^']*'|"[^"]*")/i,
+  // Stacked / piggy-backed statement: a `;` terminator followed by a SQL verb.
+  /;\s*(?:select|insert|update|delete|drop|alter|create|truncate|exec|grant|revoke|union)\b/i,
+  // UNION-based extraction.
+  /\bunion\b\s+(?:all\s+)?\bselect\b/i,
+];
+
+/**
+ * Returns `true` when the value carries a recognized SQL-injection signature.
+ * Stateless: the patterns use no `g` flag, so `RegExp.test` holds no lastIndex.
+ *
+ * @param value - the raw (already trimmed) search term
+ * @returns whether the term matches any {@link SQL_INJECTION_PATTERNS} entry
+ */
+function hasSqlInjectionSignature(value: string): boolean {
+  return SQL_INJECTION_PATTERNS.some((pattern) => pattern.test(value));
+}
+
+/**
  * Validates the query parameter for full-text search
  * (`GET /api/search?q=...`).
  *
@@ -160,11 +234,22 @@ export type ReactionInput = z.infer<typeof reactionSchema>;
  * characters (200) as a defensive cap against pathological query strings
  * that could degrade PostgreSQL `tsvector` lookup performance.
  *
+ * A final refinement rejects recognized SQL-injection signatures (see
+ * {@link SQL_INJECTION_PATTERNS}), refusing a matching probe with a 422 at the
+ * contract boundary.
+ *
  * `.strict()` rejects unknown keys.
  */
 export const searchQuerySchema = z
   .object({
-    q: z.string().trim().min(1).max(MAX_SEARCH_QUERY_LENGTH),
+    q: z
+      .string()
+      .trim()
+      .min(1, 'Enter a search term')
+      .max(MAX_SEARCH_QUERY_LENGTH, `Search is limited to ${MAX_SEARCH_QUERY_LENGTH} characters`)
+      .refine((value) => !hasSqlInjectionSignature(value), {
+        message: 'Search query contains a disallowed pattern',
+      }),
   })
   .strict();
 

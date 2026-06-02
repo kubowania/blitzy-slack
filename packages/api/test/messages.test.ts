@@ -282,16 +282,16 @@ describe('Message routes — POST /api/messages, GET /:id/replies, POST/DELETE /
   // POST /api/messages — Gate 12 validation (XOR refinement + content bounds)
   // -------------------------------------------------------------------------
   describe('POST /api/messages — Gate 12 validation', () => {
-    it('rejects a message with NEITHER channelId nor dmId (400)', async () => {
+    it('rejects a message with NEITHER channelId nor dmId (422)', async () => {
       const { token } = await registerUser();
       await request(app)
         .post('/api/messages')
         .set('Authorization', `Bearer ${token}`)
         .send({ content: 'orphan' })
-        .expect(400);
+        .expect(422);
     });
 
-    it('rejects a message with BOTH channelId AND dmId (400)', async () => {
+    it('rejects a message with BOTH channelId AND dmId (422)', async () => {
       const { token } = await registerUser();
       const channel = await createTestChannel({ token, isPrivate: false });
       const { user: bob } = await registerUser();
@@ -301,37 +301,37 @@ describe('Message routes — POST /api/messages, GET /:id/replies, POST/DELETE /
         .post('/api/messages')
         .set('Authorization', `Bearer ${token}`)
         .send({ content: 'confused', channelId: channel.id, dmId: dm.id })
-        .expect(400);
+        .expect(422);
     });
 
-    it('rejects empty content (400)', async () => {
+    it('rejects empty content (422)', async () => {
       const { token } = await registerUser();
       const channel = await createTestChannel({ token, isPrivate: false });
       await request(app)
         .post('/api/messages')
         .set('Authorization', `Bearer ${token}`)
         .send({ content: '', channelId: channel.id })
-        .expect(400);
+        .expect(422);
     });
 
-    it('rejects whitespace-only content (trim → empty) (400)', async () => {
+    it('rejects whitespace-only content (trim → empty) (422)', async () => {
       const { token } = await registerUser();
       const channel = await createTestChannel({ token, isPrivate: false });
       await request(app)
         .post('/api/messages')
         .set('Authorization', `Bearer ${token}`)
         .send({ content: '   ', channelId: channel.id })
-        .expect(400);
+        .expect(422);
     });
 
-    it('rejects content exceeding MAX_MESSAGE_LENGTH (400)', async () => {
+    it('rejects content exceeding MAX_MESSAGE_LENGTH (422)', async () => {
       const { token } = await registerUser();
       const channel = await createTestChannel({ token, isPrivate: false });
       await request(app)
         .post('/api/messages')
         .set('Authorization', `Bearer ${token}`)
         .send({ content: 'a'.repeat(MAX_MESSAGE_LENGTH + 1), channelId: channel.id })
-        .expect(400);
+        .expect(422);
     });
 
     it('accepts content exactly at MAX_MESSAGE_LENGTH (201)', async () => {
@@ -344,23 +344,23 @@ describe('Message routes — POST /api/messages, GET /:id/replies, POST/DELETE /
         .expect(201);
     });
 
-    it('rejects a malformed cuid channelId (400)', async () => {
+    it('rejects a malformed cuid channelId (422)', async () => {
       const { token } = await registerUser();
       await request(app)
         .post('/api/messages')
         .set('Authorization', `Bearer ${token}`)
         .send({ content: 'hi', channelId: 'not-a-cuid' })
-        .expect(400);
+        .expect(422);
     });
 
-    it('rejects unknown fields per the .strict() schema (400)', async () => {
+    it('rejects unknown fields per the .strict() schema (422)', async () => {
       const { token } = await registerUser();
       const channel = await createTestChannel({ token, isPrivate: false });
       await request(app)
         .post('/api/messages')
         .set('Authorization', `Bearer ${token}`)
         .send({ content: 'hi', channelId: channel.id, authorId: 'spoofed' })
-        .expect(400);
+        .expect(422);
     });
   });
 
@@ -418,7 +418,7 @@ describe('Message routes — POST /api/messages, GET /:id/replies, POST/DELETE /
       expect(reply.channelId).toBeNull();
     });
 
-    it('rejects a two-level thread (reply to a reply) with 400/422', async () => {
+    it('rejects a two-level thread (reply to a reply) with 422', async () => {
       const { token } = await registerUser();
       const channel = await createTestChannel({ token, isPrivate: false });
 
@@ -440,7 +440,8 @@ describe('Message routes — POST /api/messages, GET /:id/replies, POST/DELETE /
         .post('/api/messages')
         .set('Authorization', `Bearer ${token}`)
         .send({ content: 'nested', parentId: replyId, channelId: channel.id });
-      expect([400, 422]).toContain(nested.status);
+      // A reply-to-a-reply is a single-level-thread ValidationError (422).
+      expect(nested.status).toBe(422);
     });
 
     it('returns 404 when parentId references a non-existent message', async () => {
@@ -521,6 +522,130 @@ describe('Message routes — POST /api/messages, GET /:id/replies, POST/DELETE /
         .set('Authorization', `Bearer ${token}`)
         .send({ content: 'second', channelId: channel.id, fileId })
         .expect(409);
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // GET /api/messages/:id — single-message detail (THREAD-002)
+  //
+  // The detail endpoint returns one fully-hydrated message (author, reactions,
+  // file, reply count) and enforces the SAME channel/DM ACL as the timeline and
+  // thread reads: 404 for an unknown id, 403 for a caller without access, 422
+  // for a malformed cuid path.
+  // -------------------------------------------------------------------------
+  describe('GET /api/messages/:id', () => {
+    it('returns 401 without an Authorization header', async () => {
+      await request(app).get(`/api/messages/${PLACEHOLDER_CUID}`).expect(401);
+    });
+
+    it('returns the fully-hydrated message for its author (200)', async () => {
+      const { token, user } = await registerUser();
+      const channel = await createTestChannel({ token, isPrivate: false });
+      const created = await request(app)
+        .post('/api/messages')
+        .set('Authorization', `Bearer ${token}`)
+        .send({ content: 'detail me', channelId: channel.id })
+        .expect(201);
+      const messageId = (created.body as MessageWithAuthor).id;
+
+      const response = await request(app)
+        .get(`/api/messages/${messageId}`)
+        .set('Authorization', `Bearer ${token}`)
+        .expect(200);
+
+      const body = response.body as MessageWithAuthor;
+      expect(body.id).toBe(messageId);
+      expect(body.content).toBe('detail me');
+      expect(body.channelId).toBe(channel.id);
+      expect(body.dmId).toBeNull();
+      // Fully hydrated: author + reactions + reply count are present.
+      expect(body.author.id).toBe(user.id);
+      expect(Array.isArray(body.reactions)).toBe(true);
+      expect(body.replyCount).toBe(0);
+    });
+
+    it('returns the authoritative replyCount after a thread reply (re-hydration path)', async () => {
+      const { token } = await registerUser();
+      const channel = await createTestChannel({ token, isPrivate: false });
+      const parent = await request(app)
+        .post('/api/messages')
+        .set('Authorization', `Bearer ${token}`)
+        .send({ content: 'parent', channelId: channel.id })
+        .expect(201);
+      const parentId = (parent.body as MessageWithAuthor).id;
+
+      await request(app)
+        .post('/api/messages')
+        .set('Authorization', `Bearer ${token}`)
+        .send({ content: 'reply', parentId, channelId: channel.id })
+        .expect(201);
+
+      const response = await request(app)
+        .get(`/api/messages/${parentId}`)
+        .set('Authorization', `Bearer ${token}`)
+        .expect(200);
+
+      const body = response.body as MessageWithAuthor;
+      expect(body.id).toBe(parentId);
+      // The same hydration the message:updated broadcast carries: an incremented
+      // reply count read straight from the authoritative row.
+      expect(body.replyCount).toBe(1);
+    });
+
+    it('returns a DM message for a participant (200)', async () => {
+      const { token: aliceToken, user: alice } = await registerUser();
+      const { user: bob } = await registerUser();
+      const dm = await createTestDm({ token: aliceToken, targetUserId: bob.id });
+      const created = await request(app)
+        .post('/api/messages')
+        .set('Authorization', `Bearer ${aliceToken}`)
+        .send({ content: 'dm detail', dmId: dm.id })
+        .expect(201);
+      const messageId = (created.body as MessageWithAuthor).id;
+
+      const response = await request(app)
+        .get(`/api/messages/${messageId}`)
+        .set('Authorization', `Bearer ${aliceToken}`)
+        .expect(200);
+
+      const body = response.body as MessageWithAuthor;
+      expect(body.id).toBe(messageId);
+      expect(body.dmId).toBe(dm.id);
+      expect(body.channelId).toBeNull();
+      expect(body.author.id).toBe(alice.id);
+    });
+
+    it('returns 404 for an unknown but well-formed message id', async () => {
+      const { token } = await registerUser();
+      await request(app)
+        .get(`/api/messages/${MISSING_CUID}`)
+        .set('Authorization', `Bearer ${token}`)
+        .expect(404);
+    });
+
+    it('returns 403 when the caller cannot access the message (private non-member)', async () => {
+      const { token: ownerToken } = await registerUser();
+      const channel = await createTestChannel({ token: ownerToken, isPrivate: true });
+      const created = await request(app)
+        .post('/api/messages')
+        .set('Authorization', `Bearer ${ownerToken}`)
+        .send({ content: 'private detail', channelId: channel.id })
+        .expect(201);
+      const messageId = (created.body as MessageWithAuthor).id;
+
+      const { token: outsiderToken } = await registerUser();
+      await request(app)
+        .get(`/api/messages/${messageId}`)
+        .set('Authorization', `Bearer ${outsiderToken}`)
+        .expect(403);
+    });
+
+    it('returns 422 for a malformed message id in the path (Gate 12)', async () => {
+      const { token } = await registerUser();
+      await request(app)
+        .get('/api/messages/not-a-cuid')
+        .set('Authorization', `Bearer ${token}`)
+        .expect(422);
     });
   });
 
@@ -745,7 +870,7 @@ describe('Message routes — POST /api/messages, GET /:id/replies, POST/DELETE /
         .expect(404);
     });
 
-    it('returns 400 for an empty emoji string', async () => {
+    it('returns 422 for an empty emoji string', async () => {
       const { token } = await registerUser();
       const channel = await createTestChannel({ token, isPrivate: false });
       const messageResponse = await request(app)
@@ -759,10 +884,10 @@ describe('Message routes — POST /api/messages, GET /:id/replies, POST/DELETE /
         .post(`/api/messages/${messageId}/reactions`)
         .set('Authorization', `Bearer ${token}`)
         .send({ emoji: '' })
-        .expect(400);
+        .expect(422);
     });
 
-    it('returns 400 for an emoji exceeding MAX_EMOJI_LENGTH', async () => {
+    it('returns 422 for an emoji exceeding MAX_EMOJI_LENGTH', async () => {
       const { token } = await registerUser();
       const channel = await createTestChannel({ token, isPrivate: false });
       const messageResponse = await request(app)
@@ -776,10 +901,10 @@ describe('Message routes — POST /api/messages, GET /:id/replies, POST/DELETE /
         .post(`/api/messages/${messageId}/reactions`)
         .set('Authorization', `Bearer ${token}`)
         .send({ emoji: 'a'.repeat(MAX_EMOJI_LENGTH + 1) })
-        .expect(400);
+        .expect(422);
     });
 
-    it('returns 400 for unknown fields per the .strict() schema', async () => {
+    it('returns 422 for unknown fields per the .strict() schema', async () => {
       const { token } = await registerUser();
       const channel = await createTestChannel({ token, isPrivate: false });
       const messageResponse = await request(app)
@@ -793,7 +918,7 @@ describe('Message routes — POST /api/messages, GET /:id/replies, POST/DELETE /
         .post(`/api/messages/${messageId}/reactions`)
         .set('Authorization', `Bearer ${token}`)
         .send({ emoji: THUMBS_UP, userId: 'spoofed' })
-        .expect(400);
+        .expect(422);
     });
   });
 

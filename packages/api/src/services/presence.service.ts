@@ -2,10 +2,11 @@
  * Presence service — Redis TTL-backed user presence tracking.
  *
  * Public surface:
- *   recordHeartbeat(userId)   → HeartbeatResult { previousState, currentState, lastSeenAt }
- *   getPresence(userId)       → PresenceState
- *   getPresenceMap(userIds)   → Record<userId, PresenceState>
- *   clearPresence(userId)     → void
+ *   recordHeartbeat(userId)        → HeartbeatResult { previousState, currentState, lastSeenAt }
+ *   getPresence(userId)            → PresenceState
+ *   getPresenceMap(userIds)        → Record<userId, PresenceState>
+ *   clearPresence(userId)          → void
+ *   collectPresenceTransitions()   → PresenceTransition[]  (passive away/offline drift)
  *
  * Behavioral contract:
  *  - Presence is NEVER persisted to Postgres; it is a real-time-only signal
@@ -15,10 +16,15 @@
  *    `AWAY_THRESHOLD_MS` window, after which a missing key is interpreted as
  *    `offline` (Redis garbage-collects fully-offline users without a cron job).
  *  - `lastSeenMs` is the authoritative age signal: read-time state is always
- *    re-derived from `Date.now() - lastSeenMs` (the persisted `state` is the
- *    write-time classification, retained for the payload contract and for
- *    debugging — it is never trusted as the live bucket because it would go
- *    stale as the clock advances past the online window between reads).
+ *    re-derived from `Date.now() - lastSeenMs`. The persisted `state` is the
+ *    LAST-BROADCAST bucket (written `online` by a heartbeat, advanced to `away`
+ *    by the sweep); it is compared against the freshly-derived live bucket to
+ *    detect a passive transition, and is never trusted as the live bucket
+ *    itself because it would go stale as the clock advances between reads.
+ *  - A passive transition (a user who stops heart-beating drifts
+ *    `online → away → offline` with no further client traffic) is surfaced by
+ *    `collectPresenceTransitions`, invoked on an interval by the socket-layer
+ *    presence sweep so peers' sidebars reconcile without any client poll.
  *  - Bucketing (per AAP §0.8.4), lower bound inclusive, upper bound exclusive:
  *      online   — last heartbeat in [0, ONLINE_THRESHOLD_MS)
  *      away     — last heartbeat in [ONLINE_THRESHOLD_MS, AWAY_THRESHOLD_MS)
@@ -53,11 +59,21 @@ import type { PresenceState } from '@app/shared/types/presence';
 const PRESENCE_KEY_PREFIX = 'presence:';
 
 /**
- * TTL applied to each presence key, in seconds. Aligned to `AWAY_THRESHOLD_MS`
- * so a key survives exactly as long as it can still influence the computed
- * state; once it expires the user is `offline` by definition anyway.
+ * Extra time, in milliseconds, a presence key is retained PAST
+ * `AWAY_THRESHOLD_MS` so the presence sweep can observe the `away → offline`
+ * boundary crossing and broadcast it before the key vanishes. Without this
+ * grace the key would expire at exactly the away→offline boundary and the
+ * transition could never be observed (the PRES-001 root cause).
  */
-const PRESENCE_TTL_SECONDS = Math.ceil(AWAY_THRESHOLD_MS / 1000);
+const PRESENCE_OFFLINE_GRACE_MS = 30_000;
+
+/**
+ * TTL applied to each presence key, in seconds. Spans the full `away` window
+ * plus `PRESENCE_OFFLINE_GRACE_MS` so a key lingers briefly into the `offline`
+ * window — long enough for the sweep to emit the `away → offline` transition —
+ * before Redis garbage-collects it.
+ */
+const PRESENCE_TTL_SECONDS = Math.ceil((AWAY_THRESHOLD_MS + PRESENCE_OFFLINE_GRACE_MS) / 1000);
 
 /**
  * Build the Redis key for a user's presence entry.
@@ -78,7 +94,13 @@ function presenceKey(userId: string): string {
 interface PresenceRecord {
   /** Epoch milliseconds of the last recorded heartbeat. */
   lastSeenMs: number;
-  /** Presence bucket classified at write time. */
+  /**
+   * The last presence bucket BROADCAST for this user. Written `online` by a
+   * heartbeat and advanced to `away` by the presence sweep on a passive
+   * transition. The sweep compares this against the LIVE bucket (always
+   * re-derived from `lastSeenMs`) to detect an unbroadcast transition; this
+   * field is never trusted as the live bucket itself.
+   */
   state: PresenceState;
 }
 
@@ -262,4 +284,109 @@ export async function clearPresence(userId: string): Promise<void> {
   const key = presenceKey(userId);
   await redisClient.del(key);
   logger.debug({ userId }, 'presence.cleared');
+}
+
+/**
+ * A passive presence transition detected by {@link collectPresenceTransitions}:
+ * a user whose LIVE bucket has drifted past the bucket last broadcast for them,
+ * with no client traffic to announce it. Mirrors the `presence:update` payload
+ * so the socket-layer sweep can fan it out verbatim.
+ */
+export interface PresenceTransition {
+  /** Database id of the user whose presence drifted. */
+  userId: string;
+  /** The new LIVE bucket (`away` on the online→away drift, `offline` thereafter). */
+  state: PresenceState;
+  /** ISO 8601 timestamp of the user's last heartbeat. */
+  lastSeenAt: string;
+}
+
+/**
+ * Detect every user whose LIVE presence bucket has passively drifted past the
+ * bucket last broadcast for them, persist the drift, and return the transitions
+ * for the caller to broadcast.
+ *
+ * A heartbeat only broadcasts `offline/away → online`; the reverse drift
+ * (`online → away → offline`) happens with NO client traffic, so without an
+ * active observer it would never reach peers (the PRES-001 defect). This
+ * function is that observer:
+ *
+ *   1. `SCAN` the `presence:*` keyspace (cursor-based, non-blocking — never
+ *      `KEYS`, which would stall the Redis event loop at scale).
+ *   2. For each key, re-derive the live bucket via {@link resolveState} and
+ *      compare it to the persisted last-broadcast `state`.
+ *   3. On a drift, either:
+ *        - `online → away`: rewrite the record with `state: 'away'` (preserving
+ *          `lastSeenMs` and refreshing the extended TTL) so the next sweep
+ *          treats the away bucket as already broadcast, OR
+ *        - `away → offline`: `DEL` the key (an offline user holds no live
+ *          presence; the extended TTL guarantees the key is still present to be
+ *          observed here before Redis would GC it).
+ *   4. Collect the `{ userId, state, lastSeenAt }` transition for the caller.
+ *
+ * Purity: this function performs Redis reads/writes ONLY. It never touches
+ * Socket.io — the io fan-out is owned by the socket-layer sweep that calls it,
+ * preserving the service-below-sockets dependency direction. A non-conforming
+ * or expired key is skipped, never thrown on.
+ *
+ * @returns the list of passive transitions to broadcast (empty when no user
+ *   drifted since the last sweep)
+ */
+export async function collectPresenceTransitions(): Promise<PresenceTransition[]> {
+  // Enumerate presence keys with a cursor-based SCAN so a large keyspace never
+  // blocks Redis. COUNT is a hint, not a hard page size, so the loop continues
+  // until the cursor returns to '0'.
+  const userIds: string[] = [];
+  let cursor = '0';
+  do {
+    const [next, keys] = await redisClient.scan(
+      cursor,
+      'MATCH',
+      `${PRESENCE_KEY_PREFIX}*`,
+      'COUNT',
+      200,
+    );
+    cursor = next;
+    for (const key of keys) {
+      userIds.push(key.slice(PRESENCE_KEY_PREFIX.length));
+    }
+  } while (cursor !== '0');
+
+  if (userIds.length === 0) {
+    return [];
+  }
+
+  const transitions: PresenceTransition[] = [];
+
+  for (const userId of userIds) {
+    const key = presenceKey(userId);
+    const record = parsePresenceRecord(await redisClient.get(key));
+    if (record === null) {
+      // The key expired between SCAN and GET — Redis already GC'd the user to
+      // offline, so there is nothing left to transition.
+      continue;
+    }
+
+    const liveState = resolveState(record);
+    if (liveState === record.state) {
+      // The last-broadcast bucket still matches the live bucket: a recent
+      // heartbeat keeps the user online, or a prior sweep already broadcast and
+      // persisted the away bucket. Nothing to emit.
+      continue;
+    }
+
+    const lastSeenAt = new Date(record.lastSeenMs).toISOString();
+
+    if (liveState === 'offline') {
+      await redisClient.del(key);
+    } else {
+      const advanced: PresenceRecord = { lastSeenMs: record.lastSeenMs, state: liveState };
+      await redisClient.setex(key, PRESENCE_TTL_SECONDS, JSON.stringify(advanced));
+    }
+
+    transitions.push({ userId, state: liveState, lastSeenAt });
+    logger.debug({ userId, previousState: record.state, currentState: liveState }, 'presence.sweep.transition');
+  }
+
+  return transitions;
 }

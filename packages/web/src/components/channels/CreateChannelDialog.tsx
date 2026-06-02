@@ -43,11 +43,11 @@ export interface CreateChannelDialogProps {
   /** Invoked on backdrop click, the close `X`, Escape, Cancel, or after a successful create. */
   onOpenChange: (open: boolean) => void;
   /**
-   * Ref to the control that opens the dialog. Because the dialog is opened
-   * programmatically (not via a Radix `DialogTrigger`), focus is explicitly
-   * restored to this element when the dialog closes — so keyboard and
-   * screen-reader users return to the trigger (WAI-ARIA dialog pattern) instead
-   * of being dropped to the document body.
+   * Ref to the control that opens the dialog. The dialog is opened
+   * programmatically (not via a Radix `DialogTrigger`), so focus is explicitly
+   * restored to this element when the dialog closes, returning keyboard and
+   * screen-reader users to the trigger (WAI-ARIA dialog pattern) instead of
+   * being dropped to the document body.
    */
   triggerRef?: React.RefObject<HTMLButtonElement | null>;
 }

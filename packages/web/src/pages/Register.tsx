@@ -4,6 +4,7 @@ import { Link, useNavigate } from 'react-router';
 
 import { registerSchema, type RegisterInput } from '@app/shared/schemas/auth';
 
+import AuthLayout from '@/components/layout/AuthLayout';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import {
@@ -37,7 +38,7 @@ import { ApiError } from '@/lib/api-client';
  * field surfaces its message through the shadcn `FormMessage` primitive.
  *
  * Server-side failures raised as {@link ApiError} — most notably a `409` email
- * conflict or a `400` validation rejection — are mapped onto the form's root
+ * conflict or a `422` validation rejection — are mapped onto the form's root
  * error and rendered above the submit button; any other failure (e.g. a network
  * error) falls back to a generic message.
  *
@@ -79,9 +80,9 @@ export default function Register() {
   const isSubmitting = form.formState.isSubmitting;
 
   return (
-    <div className="flex min-h-screen items-center justify-center bg-background p-6">
+    <AuthLayout>
       <Card className="w-full max-w-md">
-        <CardHeader>
+        <CardHeader className="text-center">
           <CardTitle className="text-2xl">Create your account</CardTitle>
           <CardDescription>
             Join your team on Blitzy Slack. It takes less than a minute.
@@ -158,7 +159,11 @@ export default function Register() {
                 </p>
               ) : null}
 
-              <Button type="submit" className="w-full" disabled={isSubmitting}>
+              <Button
+                type="submit"
+                className="w-full bg-sidebar-bg text-sidebar-foreground hover:bg-sidebar-hover"
+                disabled={isSubmitting}
+              >
                 {isSubmitting ? (
                   <>
                     <Spinner className="mr-2 size-4" />
@@ -182,6 +187,6 @@ export default function Register() {
           </p>
         </CardContent>
       </Card>
-    </div>
+    </AuthLayout>
   );
 }

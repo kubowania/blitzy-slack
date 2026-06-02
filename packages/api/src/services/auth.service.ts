@@ -95,10 +95,11 @@ function toUserDto(record: PrismaUser): UserResponse {
 /**
  * Sign an HS256 JWT for the given user, expiring per `env.JWT_EXPIRES_IN`.
  *
- * The `expiresIn` assertion is required because `jsonwebtoken` types the option
- * as a narrow `StringValue | number` union while `env.JWT_EXPIRES_IN` is a
- * validated free-form duration string (e.g. `'7d'`); it is the only type
- * assertion in this file.
+ * The `expiresIn` option is type-asserted to `jsonwebtoken`'s narrow
+ * `StringValue | number` union; `env.JWT_EXPIRES_IN` is a validated free-form
+ * duration string (e.g. `'7d'`). It is the only type assertion in this file;
+ * rationale for the assertion is recorded in /docs/decision-log.md per the
+ * Explainability rule (AAP §0.8.3), not in these comments.
  */
 function signToken(user: PrismaUser): string {
   const payload: AuthTokenPayload = {

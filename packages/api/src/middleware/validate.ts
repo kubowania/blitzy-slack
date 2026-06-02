@@ -9,7 +9,7 @@ import { ValidationError } from './errors.js';
 type ValidateTarget = 'body' | 'query' | 'params';
 
 /**
- * Wrap a Zod failure in the project `ValidationError` (HTTP 400) so the
+ * Wrap a Zod failure in the project `ValidationError` (HTTP 422) so the
  * centralized error-handler maps every validation failure uniformly. The
  * flattened field errors are attached as `details` for per-field feedback.
  */
@@ -89,8 +89,8 @@ export function validate(schemas: ValidateSchemas): RequestHandler;
  * whether the first argument is a single Zod schema or a schemas map.
  *
  * On any validation failure the Zod error is wrapped in the project
- * `ValidationError` (HTTP 400) via `toValidationError` and passed to
- * `next(err)` so the centralized `errorHandler` emits a uniform 400
+ * `ValidationError` (HTTP 422) via `toValidationError` and passed to
+ * `next(err)` so the centralized `errorHandler` emits a uniform 422
  * response with field-level error details.
  */
 export function validate(

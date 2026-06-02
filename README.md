@@ -15,7 +15,7 @@ cp .env.example .env
 make local
 ```
 
-When `make local` completes, the API is reachable at <http://localhost:3000> and the web client at <http://localhost:5173>. Sign in with the seeded credentials below.
+When `make local` completes, the API readiness endpoint is reachable at <http://localhost:3000/api/health> and the web client at <http://localhost:5173>. Sign in with the seeded credentials below.
 
 | Credential | Value            |
 | ---------- | ---------------- |

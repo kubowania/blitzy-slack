@@ -1,5 +1,5 @@
 import * as React from 'react';
-import { Plus } from 'lucide-react';
+import { ChevronDown, Plus } from 'lucide-react';
 
 import { ChannelListItem } from './ChannelListItem';
 import { CreateChannelDialog } from './CreateChannelDialog';
@@ -20,15 +20,20 @@ export interface ChannelListProps {
 /**
  * The "Channels" section of the workspace sidebar.
  *
- * Renders the section heading with an icon-only "+" trigger that opens the
- * {@link CreateChannelDialog}, followed by the current user's channels (sourced
- * from {@link useChannels}) as a list of {@link ChannelListItem} rows. Shows
+ * Renders a collapsible section heading — a disclosure-chevron toggle button
+ * (the "Channels ▾" header in screenshots 29/100) paired with an icon-only "+"
+ * trigger that opens the {@link CreateChannelDialog} — followed by the current
+ * user's channels (sourced from {@link useChannels}) as a list of
+ * {@link ChannelListItem} rows. Collapsing the section hides the rows while
+ * keeping the heading visible, matching Slack's sidebar behavior. Shows
  * skeleton placeholders while the initial fetch is in flight, an empty state
  * when the user has no channels, and an inline message on fetch failure. The
  * {@link CreateChannelDialog} stays mounted and is toggled by local state.
  */
 export function ChannelList({ className }: ChannelListProps): React.JSX.Element {
   const [isCreateDialogOpen, setIsCreateDialogOpen] = React.useState<boolean>(false);
+  // Whether the section's rows are collapsed (hidden) behind its heading.
+  const [collapsed, setCollapsed] = React.useState<boolean>(false);
   // Ref to the "+" trigger so the dialog can restore focus to it on close.
   const createTriggerRef = React.useRef<HTMLButtonElement | null>(null);
   const { channels, isLoading, error } = useChannels();
@@ -39,8 +44,21 @@ export function ChannelList({ className }: ChannelListProps): React.JSX.Element 
   return (
     <section aria-label="Channels" className={cn('flex flex-col gap-1 py-2', className)}>
       <div className="flex items-center justify-between px-2">
-        <h2 className="text-xs font-semibold uppercase tracking-wide text-sidebar-foreground/70">
-          Channels
+        <h2 className="min-w-0">
+          <button
+            type="button"
+            aria-expanded={!collapsed}
+            onClick={() => {
+              setCollapsed((value) => !value);
+            }}
+            className="flex w-full items-center gap-1 text-xs font-semibold uppercase tracking-wide text-sidebar-foreground/70 hover:text-sidebar-foreground"
+          >
+            <ChevronDown
+              aria-hidden="true"
+              className={cn('size-3 shrink-0 transition-transform', collapsed && '-rotate-90')}
+            />
+            <span>Channels</span>
+          </button>
         </h2>
         <Button
           ref={createTriggerRef}
@@ -57,45 +75,49 @@ export function ChannelList({ className }: ChannelListProps): React.JSX.Element 
         </Button>
       </div>
 
-      {isLoading ? (
-        <div role="status" aria-label="Loading channels" className="flex flex-col gap-1 px-2">
-          {[0, 1, 2, 3].map((i) => (
-            <Skeleton key={i} className="h-7 w-full bg-sidebar-accent/30" />
-          ))}
-        </div>
-      ) : null}
+      {!collapsed ? (
+        <>
+          {isLoading ? (
+            <div role="status" aria-label="Loading channels" className="flex flex-col gap-1 px-2">
+              {[0, 1, 2, 3].map((i) => (
+                <Skeleton key={i} className="h-7 w-full bg-sidebar-accent/30" />
+              ))}
+            </div>
+          ) : null}
 
-      {error !== null ? (
-        <div className="px-2 py-2 text-xs text-destructive">
-          Failed to load channels. {error.message}
-        </div>
-      ) : null}
+          {error !== null ? (
+            <div className="px-2 py-2 text-xs text-destructive">
+              Failed to load channels. {error.message}
+            </div>
+          ) : null}
 
-      {showEmpty ? (
-        <Empty className="border-none px-2 py-4 text-sidebar-foreground">
-          <EmptyHeader>
-            <EmptyTitle className="text-sm font-medium">No channels yet</EmptyTitle>
-            <EmptyDescription className="text-xs text-sidebar-foreground/70">
-              Create your first channel to get started.
-            </EmptyDescription>
-          </EmptyHeader>
-        </Empty>
-      ) : null}
+          {showEmpty ? (
+            <Empty className="border-none px-2 py-4 text-sidebar-foreground">
+              <EmptyHeader>
+                <EmptyTitle className="text-sm font-medium">No channels yet</EmptyTitle>
+                <EmptyDescription className="text-xs text-sidebar-foreground/70">
+                  Create your first channel to get started.
+                </EmptyDescription>
+              </EmptyHeader>
+            </Empty>
+          ) : null}
 
-      {showList ? (
-        <ul className="flex flex-col gap-0.5 px-2">
-          {channels.map((channel) => (
-            <li key={channel.id}>
-              <ChannelListItem
-                channel={{
-                  id: channel.id,
-                  name: channel.name,
-                  isPrivate: channel.isPrivate,
-                }}
-              />
-            </li>
-          ))}
-        </ul>
+          {showList ? (
+            <ul className="flex flex-col gap-0.5 px-2">
+              {channels.map((channel) => (
+                <li key={channel.id}>
+                  <ChannelListItem
+                    channel={{
+                      id: channel.id,
+                      name: channel.name,
+                      isPrivate: channel.isPrivate,
+                    }}
+                  />
+                </li>
+              ))}
+            </ul>
+          ) : null}
+        </>
       ) : null}
 
       <CreateChannelDialog

@@ -64,7 +64,7 @@ import type {
   PRESENCE_UPDATE,
   ERROR,
 } from '../constants/events.js';
-import type { Message, MessageWithAuthor, ReactionSummary } from './message.js';
+import type { MessageWithAuthor, ReactionSummary } from './message.js';
 import type { PresenceUpdate } from './presence.js';
 
 /**
@@ -92,12 +92,12 @@ export interface ClientToServerEvents {
    *
    * Fire-and-forget: unlike `channel:join`, a DM has no durable membership to
    * create — both participants are fixed at DM creation — so this purely
-   * subscribes the LIVE socket to the broadcast room. It exists because the
-   * connection-time auto-join only covers DMs that existed when the socket
-   * connected; a DM started mid-session needs the open DM view to subscribe
-   * its socket so `message:new` / `typing:*` broadcasts arrive without a
-   * reconnect. The server enforces the participant ACL and emits `error` on
-   * failure.
+   * subscribes the LIVE socket to the broadcast room. It covers DMs started
+   * mid-session: the connection-time auto-join only subscribes DMs that existed
+   * when the socket connected, so a newly-opened DM view emits this event to
+   * subscribe its socket and receive `message:new` / `typing:*` broadcasts
+   * without a reconnect. The server enforces the participant ACL and emits
+   * `error` on failure.
    * @param dmId - The direct-message conversation to subscribe to.
    */
   [DM_JOIN]: (dmId: string) => void;
@@ -194,12 +194,14 @@ export interface ServerToClientEvents {
   [MESSAGE_NEW]: (message: MessageWithAuthor) => void;
 
   /**
-   * A message's content or metadata was updated server-side (e.g., a
-   * reaction-count refresh or future-edit scenario). The payload is the
-   * BARE Message shape (no rehydrated author or reactions); subscribers
-   * should reconcile against their local cache.
+   * A message's server-side state was updated and subscribers should reconcile
+   * their local copy against the authoritative snapshot. The PoC emits this when
+   * a thread reply changes its parent's `replyCount`, carrying the re-hydrated
+   * PARENT message. The payload is the fully-hydrated MessageWithAuthor (author,
+   * reactions, file, and the authoritative `replyCount`) — identical in shape to
+   * `message:new` — so subscribers replace the cached message by id.
    */
-  [MESSAGE_UPDATED]: (message: Message) => void;
+  [MESSAGE_UPDATED]: (message: MessageWithAuthor) => void;
 
   /**
    * A reaction was added to a message in a subscribed room.

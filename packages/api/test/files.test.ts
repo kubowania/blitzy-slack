@@ -13,7 +13,7 @@
  *   Rule 4  — Every test user is created through `registerUser()`
  *             (`POST /api/auth/register`); no direct Prisma user inserts.
  *   Gate 9  — File upload completes in under 5 seconds.
- *   Gate 12 — Multer + Zod validation (oversized -> 413, missing file -> 400).
+ *   Gate 12 — Multer + Zod validation (oversized -> 413, missing file -> 422).
  *   Gate 13 — Contributes coverage to `services/files.service.ts`.
  *
  * AAP refs: §0.1.1 (10 MB cap), §0.4.4 (File model), §0.6.2 (multer disk storage),
@@ -25,7 +25,7 @@
  *     extension, while `originalName` is preserved verbatim.
  *   - Oversize uploads surface multer's `LIMIT_FILE_SIZE` MulterError, which the
  *     centralized error handler maps to 413 with `code: 'LIMIT_FILE_SIZE'`; an
- *     absent `file` field yields a 400 ValidationError. No File row is persisted
+ *     absent `file` field yields a 422 ValidationError. No File row is persisted
  *     on either failure.
  *   - GET /api/files/:id STREAMS the raw bytes (`res.sendFile`) with the persisted
  *     MIME type as Content-Type; access is granted to the uploader OR a member of
@@ -295,13 +295,13 @@ describe('POST /api/files, GET /api/files/:id', () => {
   // POST /api/files — bad requests (Gate 12)
   // ---------------------------------------------------------------------------
   describe('POST /api/files — bad requests', () => {
-    it('returns 400 when no file is attached', async () => {
+    it('returns 422 when no file is attached', async () => {
       const { token } = await registerUser();
 
       const response = await request(app)
         .post('/api/files')
         .set('Authorization', `Bearer ${token}`)
-        .expect(400);
+        .expect(422);
 
       const body = response.body as ErrorResponseBody;
       expect(typeof body.message).toBe('string');

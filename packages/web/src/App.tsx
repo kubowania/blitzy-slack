@@ -9,6 +9,9 @@
  * App composes the view tree and the single global overlay surface:
  *
  *   - {@link AuthBootstrap} — validates a persisted session once on mount.
+ *   - {@link ErrorBoundary} — catches render-phase failures below it (including
+ *     a failed lazy route-chunk import while offline) and renders a recoverable
+ *     fallback instead of a blank page.
  *   - {@link Router} (`./router`) — the full client-side route tree.
  *   - {@link Toaster} (the shadcn wrapper at `@/components/ui/sonner`) — the
  *     single global toast surface; mounting it once here keeps it reachable from
@@ -17,6 +20,7 @@
  * Per the Explainability rule (AAP §0.8.3), design rationale lives in
  * /docs/decision-log.md, not in these comments.
  */
+import { ErrorBoundary } from '@/components/ErrorBoundary';
 import { Toaster } from '@/components/ui/sonner';
 import { useMe } from '@/hooks/useAuth';
 
@@ -44,7 +48,9 @@ export function App() {
   return (
     <>
       <AuthBootstrap />
-      <Router />
+      <ErrorBoundary>
+        <Router />
+      </ErrorBoundary>
       <Toaster position="top-right" richColors closeButton />
     </>
   );

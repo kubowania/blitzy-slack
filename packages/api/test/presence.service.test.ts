@@ -51,6 +51,7 @@ import {
   getPresenceMap,
   recordHeartbeat,
   clearPresence,
+  collectPresenceTransitions,
 } from '../src/services/presence.service.js';
 import { cleanDatabase, closeTestResources, registerUser, redisClient } from './setup.js';
 
@@ -220,5 +221,96 @@ describe('presence.service — clearPresence', () => {
     await clearPresence(userId);
 
     await expect(getPresence(userId)).resolves.toBe('offline');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// collectPresenceTransitions — passive online→away→offline drift (PRES-001)
+//
+// A heartbeat only broadcasts the forward `offline/away → online` edge; the
+// reverse drift happens with NO client traffic, so the sweep is the observer
+// that detects it. Each assertion filters the returned transitions by the
+// test's own userId (rather than asserting an exact array length) so the
+// keyspace-wide SCAN is robust against any residual presence key.
+// ---------------------------------------------------------------------------
+describe('presence.service — collectPresenceTransitions (passive drift, PRES-001)', () => {
+  it('reports an online→away passive transition with the lastSeen timestamp', async () => {
+    const userId = await registerTrackedUser();
+    // Last-broadcast bucket 'online'; last heartbeat 2 min ago → live bucket 'away'.
+    const lastSeenMs = Date.now() - 120_000;
+    await seedRecord(userId, lastSeenMs, 'online');
+
+    const transitions = await collectPresenceTransitions();
+    const mine = transitions.find((t) => t.userId === userId);
+
+    expect(mine).toBeDefined();
+    expect(mine?.state).toBe('away');
+    expect(mine?.lastSeenAt).toBe(new Date(lastSeenMs).toISOString());
+  });
+
+  it('persists the away bucket so an immediate second sweep is idempotent (no re-broadcast)', async () => {
+    const userId = await registerTrackedUser();
+    await seedRecord(userId, Date.now() - 120_000, 'online');
+
+    const first = await collectPresenceTransitions();
+    expect(first.find((t) => t.userId === userId)?.state).toBe('away');
+
+    // The record was rewritten with state:'away', so the live bucket now equals
+    // the last-broadcast bucket and the user no longer drifts.
+    const second = await collectPresenceTransitions();
+    expect(second.find((t) => t.userId === userId)).toBeUndefined();
+
+    // The key still resolves as 'away' (rewritten, not deleted).
+    await expect(getPresence(userId)).resolves.toBe('away');
+  });
+
+  it('reports an away→offline passive transition and DELETES the key', async () => {
+    const userId = await registerTrackedUser();
+    // Last-broadcast bucket 'away'; last heartbeat 6 min ago → live bucket 'offline'.
+    await seedRecord(userId, Date.now() - 360_000, 'away');
+
+    const transitions = await collectPresenceTransitions();
+    const mine = transitions.find((t) => t.userId === userId);
+
+    expect(mine).toBeDefined();
+    expect(mine?.state).toBe('offline');
+
+    // An offline user holds no live presence: the key is removed entirely.
+    await expect(redisClient.get(presenceKey(userId))).resolves.toBeNull();
+  });
+
+  it('reports a direct online→offline transition when the away window was skipped', async () => {
+    const userId = await registerTrackedUser();
+    // Last-broadcast bucket 'online' but last heartbeat 6 min ago (a sweep never
+    // caught the intermediate away window) → live bucket 'offline'.
+    await seedRecord(userId, Date.now() - 360_000, 'online');
+
+    const transitions = await collectPresenceTransitions();
+    const mine = transitions.find((t) => t.userId === userId);
+
+    expect(mine).toBeDefined();
+    expect(mine?.state).toBe('offline');
+    await expect(redisClient.get(presenceKey(userId))).resolves.toBeNull();
+  });
+
+  it('does NOT report a user whose away bucket was already broadcast', async () => {
+    const userId = await registerTrackedUser();
+    // Live bucket 'away' AND last-broadcast bucket 'away' → no drift.
+    await seedRecord(userId, Date.now() - 120_000, 'away');
+
+    const transitions = await collectPresenceTransitions();
+    expect(transitions.find((t) => t.userId === userId)).toBeUndefined();
+
+    // The record is untouched (still resolves as 'away').
+    await expect(getPresence(userId)).resolves.toBe('away');
+  });
+
+  it('does NOT report a freshly online user (no drift)', async () => {
+    const userId = await registerTrackedUser();
+    await recordHeartbeat(userId);
+
+    const transitions = await collectPresenceTransitions();
+    expect(transitions.find((t) => t.userId === userId)).toBeUndefined();
+    await expect(getPresence(userId)).resolves.toBe('online');
   });
 });

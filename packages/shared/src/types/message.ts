@@ -7,11 +7,12 @@
  * declared here to preserve the LEAF invariant (AAP §0.4.3) — the shared
  * package MUST NOT import from @app/db.
  *
- * Date fields are typed as ISO 8601 `string` (not `Date`) because they are
- * serialized via `JSON.stringify` on the wire and parsed lazily by the
- * client. Foreign-key optional fields are typed as `... | null` (not `?`)
- * because Prisma returns `null` (not `undefined`) for missing optional
- * relations.
+ * Date fields are typed as ISO 8601 `string` (not `Date`): they are serialized
+ * via `JSON.stringify` on the wire and parsed lazily by the client. Foreign-key
+ * optional fields are typed as `... | null` (not `?`), mirroring the `null` that
+ * Prisma returns for a missing optional relation. Rationale for these wire-shape
+ * conventions is recorded in /docs/decision-log.md per the Explainability rule
+ * (AAP §0.8.3), not in these comments.
  */
 
 import type { PublicUser } from './user.js';
