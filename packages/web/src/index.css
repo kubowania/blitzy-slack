@@ -1,0 +1,105 @@
+@import 'tailwindcss';
+
+@theme {
+  /* shadcn neutral baseColor */
+  --color-background: oklch(1 0 0);
+  --color-foreground: oklch(0.145 0 0);
+
+  --color-card: oklch(1 0 0);
+  --color-card-foreground: oklch(0.145 0 0);
+
+  --color-popover: oklch(1 0 0);
+  --color-popover-foreground: oklch(0.145 0 0);
+
+  --color-secondary: oklch(0.97 0 0);
+  --color-secondary-foreground: oklch(0.205 0 0);
+
+  --color-muted: oklch(0.97 0 0);
+  --color-muted-foreground: oklch(0.556 0 0);
+
+  --color-accent: oklch(0.97 0 0);
+  --color-accent-foreground: oklch(0.205 0 0);
+
+  --color-destructive: oklch(0.577 0.245 27.325);
+  --color-destructive-foreground: oklch(0.985 0 0);
+
+  --color-border: oklch(0.922 0 0);
+  --color-input: oklch(0.922 0 0);
+  /* Focus ring uses the Slack-primary accent (matches --color-primary below) so
+     focus-visible treatments echo the Slack reference; see /docs/decision-log.md. */
+  --color-ring: oklch(0.491 0.125 248);
+
+  /* Modal / sheet overlay scrim (semantic token for Dialog/Sheet backdrops) */
+  --color-overlay: oklch(0 0 0 / 0.5);
+
+  --radius: 0.625rem;
+
+  /* Slack primary accent */
+  --color-primary: oklch(0.491 0.125 248);
+  --color-primary-foreground: oklch(0.985 0 0);
+
+  /* Slack-aubergine sidebar palette (AAP §0.5.3 token contract) */
+  --color-sidebar-bg: oklch(0.272 0.101 327);
+  --color-sidebar-hover: oklch(0.37 0.09 323);
+  --color-sidebar-foreground: oklch(0.94 0.022 320);
+  --color-sidebar-hover-foreground: oklch(0.985 0 0);
+  --color-sidebar-primary: oklch(0.491 0.125 248);
+  --color-sidebar-primary-foreground: oklch(0.985 0 0);
+  --color-sidebar-border: oklch(0.234 0.086 326);
+  --color-sidebar-ring: oklch(0.545 0.096 323);
+  /* Selected/active sidebar row: light-lavender pill fill + dark-aubergine text */
+  --color-sidebar-accent: oklch(0.95 0.02 320);
+  --color-sidebar-accent-foreground: oklch(0.21 0.045 318);
+
+  /* Presence dot states (semantic tokens; AAP §0.5.3 token discipline). Values
+     match Tailwind's green-500 / yellow-500 / gray-400 so the dots are visually
+     identical to the previous palette classes, now referenced by semantic name. */
+  --color-presence-online: oklch(72.3% 0.219 149.579);
+  --color-presence-away: oklch(79.5% 0.184 86.047);
+  --color-presence-offline: oklch(70.7% 0.022 261.325);
+
+  /* Search-hit highlight (semantic token). Matches Tailwind's yellow-200; used
+     with an /opacity modifier (bg-search-highlight/70) by the search excerpt. */
+  --color-search-highlight: oklch(94.5% 0.129 101.54);
+}
+
+@layer base {
+  /* Tailwind CSS v4 changed the default border color of the bare `border`
+     utility from gray-200 to `currentColor`. This preflight reset restores the
+     v3 behaviour so that shadcn primitives using a bare `border`/`border-l`
+     (Card, Dialog, Popover, DropdownMenu, Sheet, …) render the light
+     `--color-border` hairline instead of a near-black border. Explicit
+     border-color utilities (border-input, border-border, border-transparent, …)
+     still win because they live in the higher utilities layer.
+     Rationale: /docs/decision-log.md. */
+  *,
+  ::before,
+  ::after {
+    border-color: var(--color-border);
+  }
+
+  html {
+    font-family: var(--font-sans);
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+
+  body {
+    margin: 0;
+    background-color: var(--color-background);
+    color: var(--color-foreground);
+    min-height: 100vh;
+  }
+
+  button,
+  [role='button'] {
+    cursor: pointer;
+  }
+
+  img,
+  svg,
+  video {
+    display: block;
+    max-width: 100%;
+  }
+}

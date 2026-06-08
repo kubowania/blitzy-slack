@@ -1,0 +1,108 @@
+# ---------------------------------------------------------------------------
+# blitzy-slack — .gitignore
+# Patterns without a leading "/" match at any depth; a trailing "/" matches
+# directories only. Keep allow-list ("!") rules AFTER the ignore rule they undo.
+# ---------------------------------------------------------------------------
+
+# Dependency directories
+node_modules/
+.pnpm-store/
+.pnpm-debug.log
+.npm
+.yarn
+
+# Build outputs
+dist/
+build/
+out/
+.next/
+.turbo/
+
+# TypeScript build info
+*.tsbuildinfo
+
+# Coverage reports
+coverage/
+.nyc_output/
+lcov.info
+
+# Test artifacts
+test-results/
+playwright-report/
+playwright/.cache/
+playwright/.auth/
+# Playwright visual-baseline snapshots seeded at runtime by the
+# screenshot-fidelity suite (binary PNGs); never tracked in source.
+__screenshots__/
+# Blitzy ad-hoc validation test files (never committed)
+blitzy_adhoc_test_*
+
+# Environment files
+.env
+.env.local
+.env.*.local
+.env.development
+.env.production
+.env.test
+# Keep templates
+!.env.example
+
+# Editor & OS metadata
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.json
+!.vscode/launch.json
+.idea/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+# Runtime data
+*.pid
+*.seed
+*.pid.lock
+
+# Optional caches
+.eslintcache
+.cache/
+
+# Local uploaded files (FILE_UPLOAD_PATH default) — keep the folder via .gitkeep
+uploads/*
+!uploads/.gitkeep
+# The API resolves the default FILE_UPLOAD_PATH (./uploads) against its own
+# working directory (packages/api) when started via `make local`, so uploaded
+# files land here at runtime. This directory is created on demand and cleaned
+# by `make clean`; never track its contents.
+packages/api/uploads/
+
+# Prisma local artifacts
+packages/db/prisma/dev.db
+packages/db/prisma/dev.db-journal
+# DO NOT ignore migrations — they are committed per AAP 0.7.1 / Gate 2
+# packages/db/prisma/migrations/  (explicitly NOT ignored)
+
+# Generated Prisma client (regenerated via `prisma generate`)
+packages/db/src/generated/
+.prisma/
+
+# OS / archive
+*.tar
+*.zip
+*.gz
+
+# Vite
+dist-ssr/
+*.local
+
+# MkDocs build output
+site/
